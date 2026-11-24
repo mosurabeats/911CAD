@@ -4,7 +4,7 @@ A self-hosted computer-aided dispatch and call-logging system that keeps a polic
 
 It was built to get an agency through an outage of several weeks (for example, the Valcour outage). The data model already carries an agency ID on every record, so the same codebase can grow into a regional or statewide system. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
-> **Read [docs/SECURITY_CJIS.md](docs/SECURITY_CJIS.md) before going live.** This system will hold criminal justice information. Your agency's CJIS obligations still apply during an outage. Coordinate with your agency's TAC and the state CJIS Systems Officer.
+> **To install securely, follow [docs/INSTALL_WINDOWS.md](docs/INSTALL_WINDOWS.md)** (server, dispatcher PCs, MDTs, go-live checklist). **Read [docs/SECURITY_CJIS.md](docs/SECURITY_CJIS.md) before going live.** This system will hold criminal justice information. Your agency's CJIS obligations still apply during an outage. Coordinate with your agency's TAC and the state CJIS Systems Officer.
 
 ## What it does
 
@@ -19,8 +19,8 @@ It was built to get an agency through an outage of several weeks (for example, t
 | **Multiple dispatchers** | Any number of dispatch consoles, desk PCs and MDTs work at once against one server, and every screen updates within about 3 seconds. If two people edit the same call's details at the same moment, the second person is told to reload instead of silently overwriting the first person's changes. Narrative entries and unit status changes never conflict. |
 | **Network-drive archive** | Optionally keeps a copy of every call in a folder such as `I:\CAD\Calls`: a readable `.txt` call record and a complete `.json` file per call, plus a `Daily\YYYY-MM-DD.csv` call log. Files are rewritten within about 30 seconds whenever a call changes. If the drive drops, dispatch keeps working and the copy catches up when the drive is back. |
 | **Export** | One-click ZIP with every record as nested JSON plus one CSV per table, the schema, and a README for the vendor doing the import. See [docs/DATA_MIGRATION.md](docs/DATA_MIGRATION.md). |
-| **Security** | Role-based access: admin, supervisor, dispatcher, officer, records. Optional or enforced TOTP two-factor (any authenticator app). Account lockout. 30-minute inactivity timeout. Forced change of temporary passwords. CSRF protection, strict CSP and security headers, TLS. |
-| **Audit** | Every sign-in (including failures), call view, search, change and export is logged. Each audit entry is hash-chained to the previous one, so tampering is detectable (`manage.py verify-audit`). Database triggers block edits and deletes of the audit log, narratives and calls. |
+| **Security** | Secure by default: HTTPS required, two-factor sign-in required, and only connections from your PD networks accepted. Role-based access, lockout, auto-disable of inactive accounts, rejection of common passwords, a 30-minute idle timeout, and a previous-logon notice. CSRF protection, strict CSP and security headers. |
+| **Audit** | Every sign-in (including failures), every denied action, call view, search, change and export is logged. Each audit entry is hash-chained to the previous one, so tampering is detectable (`manage.py verify-audit`). Database triggers block edits and deletes of the audit log, narratives and calls. |
 | **Resilience** | A single SQLite file in WAL mode. Automatic hourly backups (the last 96 are kept). Runs on Windows or Linux on any office PC. |
 
 There are **no third-party dependencies**: Python 3.10+ standard library only, and no internet or CDN access is needed at runtime. This keeps installation fast, works on an isolated network, and leaves no outside supply chain to vet.

@@ -319,6 +319,14 @@ class Database:
         c.executescript(SCHEMA)
         c.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
         c.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('seq', '0')")
+        self._migrate(c)
+
+    @staticmethod
+    def _migrate(c):
+        """Additive column migrations for databases created by earlier versions."""
+        cols = {r[1] for r in c.execute("PRAGMA table_info(users)")}
+        if "enabled_at" not in cols:
+            c.execute("ALTER TABLE users ADD COLUMN enabled_at TEXT")
 
     def seq(self):
         return int(self.conn().execute("SELECT value FROM meta WHERE key='seq'").fetchone()[0])

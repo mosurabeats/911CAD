@@ -8,6 +8,10 @@ DEFAULTS = {
         "tls_cert": "",
         "tls_key": "",
         "trust_proxy": "false",
+        # Comma-separated networks allowed to connect, e.g. "10.20.30.0/24, 10.99.0.0/16". Empty = any.
+        "allowed_networks": "",
+        # Refuse to start without TLS unless explicitly allowed (testing only).
+        "allow_insecure_http": "false",
     },
     "agency": {
         "name": "Police Department",
@@ -21,7 +25,9 @@ DEFAULTS = {
     "security": {
         "session_idle_minutes": "30",
         "session_max_hours": "12",
-        "require_mfa": "false",
+        "require_mfa": "true",
+        # Disable accounts not used for this many days (0 = never).
+        "inactive_disable_days": "90",
         "lockout_attempts": "5",
         "lockout_minutes": "15",
         "password_min_length": "12",
@@ -30,9 +36,14 @@ DEFAULTS = {
         "dir": "",
         "interval_seconds": "30",
     },
+    "audit": {
+        # Second, append-only copy of the audit log (JSON lines) on another machine/share.
+        "mirror_dir": "",
+    },
     "storage": {
         "db_path": "data/cad.sqlite3",
         "backup_dir": "data/backups",
+        "log_file": "data/logs/server.log",
     },
 }
 

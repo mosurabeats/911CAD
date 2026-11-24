@@ -213,3 +213,56 @@ class Archiver:
                          k["location_common"] or "", k["caller_name"] or "", k["caller_phone"] or "", k["units"] or "",
                          local(k["first_disp"]), local(k["first_ons"]), local(k["closed_at"]), k["disposition"] or ""])
         atomic_write(os.path.join(self.dir, "Daily", f"{day}.csv"), out.getvalue())
+
+
+class AuditMirror:
+    """Appends every audit entry to <mirror_dir>/audit-YYYY-MM-DD.jsonl on another machine or share.
+
+    The database already hash-chains the audit log, but someone with full control of the server could
+    rebuild the chain. A continuously written second copy elsewhere (readable by the TAC/IT, not by
+    CAD users or the server's admins) makes that detectable.
+    """
+
+    def __init__(self, app, directory, interval_seconds=15):
+        self.app = app
+        self.dir = directory
+        self.interval = interval_seconds
+        self.last_error = None
+
+    def start(self):
+        if self.dir:
+            threading.Thread(target=self._loop, daemon=True, name="audit-mirror").start()
+
+    def _loop(self):
+        while True:
+            try:
+                self.sync()
+                self.last_error = None
+            except Exception as e:  # noqa: BLE001
+                self.last_error = f"{now_iso()} {e}"
+                log.warning("Audit mirror failed (will retry): %s", e)
+            finally:
+                self.app.db.close_thread_conn()
+            time.sleep(self.interval)
+
+    def sync(self):
+        db = self.app.db
+        c = db.conn()
+        os.makedirs(self.dir, exist_ok=True)
+        row = c.execute("SELECT value FROM meta WHERE key='audit_mirrored_id'").fetchone()
+        last = int(row[0]) if row else 0
+        rows = c.execute("SELECT * FROM audit_log WHERE id > ? ORDER BY id LIMIT 5000", (last,)).fetchall()
+        if not rows:
+            return 0
+        by_day = {}
+        for r in rows:
+            by_day.setdefault(r["at"][:10], []).append(json.dumps(row_to_dict(r), separators=(",", ":")))
+        for day, lines in by_day.items():
+            with open(os.path.join(self.dir, f"audit-{day}.jsonl"), "a", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+        with db.write_lock:
+            c.execute("INSERT INTO meta(key, value) VALUES ('audit_mirrored_id', ?)"
+                      " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(rows[-1]["id"]),))
+        return len(rows)

@@ -40,8 +40,20 @@ def dummy_verify(password):
     verify_password(password, _DUMMY_HASH)
 
 
+WEAK_WORDS = {
+    "password", "passw0rd", "letmein", "welcome", "changeme", "admin", "administrator", "qwerty", "asdf",
+    "iloveyou", "monkey", "dragon", "football", "baseball", "hockey", "master", "login", "secret", "default",
+    "police", "policedept", "dispatch", "dispatcher", "officer", "sheriff", "trooper", "cad", "valcour", "spillman",
+    "montpelier", "vermont", "capitol", "summer", "winter", "spring", "fall", "autumn", "january", "december",
+    "abc", "abcd", "abcdef", "test", "temp", "temporary", "user", "guest",
+}
+
+
 def password_problems(password, min_length, username=None):
     problems = []
+    letters = "".join(ch for ch in password.lower() if ch.isalpha())
+    if letters in WEAK_WORDS or len(set(password)) <= 3:
+        problems.append("is too common or predictable (e.g. a season, 'Police', the town name, or 'Password' plus numbers)")
     if len(password) < min_length:
         problems.append(f"must be at least {min_length} characters")
     if len(password) > 256:

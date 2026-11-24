@@ -58,7 +58,8 @@ class CadTest(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         cfg = Config(None, {
-            "server": {"host": "127.0.0.1", "port": "0"},
+            "server": {"host": "127.0.0.1", "port": "0", "allow_insecure_http": "true"},
+            "audit": {"mirror_dir": os.path.join(cls.tmp.name, "audit_mirror")},
             "storage": {"db_path": os.path.join(cls.tmp.name, "t.sqlite3"), "backup_dir": ""},
             "archive": {"dir": os.path.join(cls.tmp.name, "I_drive", "CAD", "Calls")},
             "security": {"require_mfa": "false", "lockout_attempts": "3"},
@@ -324,6 +325,63 @@ class CadTest(unittest.TestCase):
             c.execute("UPDATE counters SET value=0 WHERE kind='call'")
         nxt = a.call("POST", "/api/calls", {"call_type": "OTHER"})["call_number"]
         self.assertNotEqual(first, nxt)
+
+    def test_weak_passwords_rejected(self):
+        for pw in ("Password123!", "Montpelier2026!", "Summer-2026!!", "Police#12345"):
+            self.assertTrue(auth.password_problems(pw, 12), pw)
+        self.assertFalse(auth.password_problems("Granite-Ladder-Orbit-7", 12))
+        self.admin.call("POST", "/api/admin/users", {"username": "weakpw", "full_name": "W", "role": "officer",
+                                                     "password": "Vermont2026!!"}, expect=400)
+
+    def test_access_denied_is_audited(self):
+        rec = self.make_user("records_denied", "records")
+        rec.call("POST", "/api/calls", {"call_type": "OTHER"}, expect=403)
+        e = self.admin.call("GET", "/api/audit?action=ACCESS_DENIED&username=records_denied")["entries"]
+        self.assertTrue(e and "/api/calls" in e[0]["entity_id"])
+
+    def test_previous_logon_notice(self):
+        c1 = self.make_user("prevlog", "dispatcher")
+        bad = Client(self.base)
+        bad.call("POST", "/api/login", {"username": "prevlog", "password": "nope"}, expect=401)
+        c2 = Client(self.base)
+        c2.login("prevlog", "New-Password-4567")
+        pl = c2.call("GET", "/api/me")["previous_logon"]
+        self.assertIsNotNone(pl["at"])
+        self.assertEqual(pl["failed_since"], 1)
+        del c1
+
+    def test_inactive_account_disabled(self):
+        self.make_user("sleepy", "officer")
+        with self.app.db.tx() as c:
+            c.execute("UPDATE users SET last_login_at='2020-01-01T00:00:00Z', created_at='2020-01-01T00:00:00Z'"
+                      " WHERE username='sleepy'")
+        Client(self.base).call("POST", "/api/login", {"username": "sleepy", "password": "New-Password-4567"},
+                               expect=401)
+        users = {u["username"]: u for u in self.admin.call("GET", "/api/admin/users")["users"]}
+        self.assertEqual(users["sleepy"]["active"], 0)
+        # Re-enabling by an admin lets them sign in again.
+        self.admin.call("PUT", f"/api/admin/users/{users['sleepy']['id']}", {"action": "update", "active": True})
+        Client(self.base).login("sleepy", "New-Password-4567")
+
+    def test_audit_mirror(self):
+        n = self.app.audit_mirror.sync()
+        self.assertGreater(n, 0)
+        files = os.listdir(self.app.audit_mirror.dir)
+        lines = sum(len(open(os.path.join(self.app.audit_mirror.dir, f)).read().splitlines()) for f in files)
+        self.assertEqual(lines, self.app.db.conn().execute("SELECT max(id) FROM audit_log").fetchone()[0])
+        self.assertEqual(self.app.audit_mirror.sync(), 0)
+
+    def test_tls_required_and_network_allowlist(self):
+        from cad.server import App
+        with self.assertRaises(SystemExit):
+            make_server(Config(None, {"storage": {"db_path": os.path.join(self.tmp.name, "x.sqlite3")}}))
+        app = App(Config(None, {"storage": {"db_path": os.path.join(self.tmp.name, "y.sqlite3")},
+                                "server": {"allowed_networks": "10.20.30.0/24, 127.0.0.1/32"}}))
+        self.assertTrue(app.ip_allowed("10.20.30.44"))
+        self.assertTrue(app.ip_allowed("127.0.0.1"))
+        self.assertTrue(app.ip_allowed("::ffff:10.20.30.5"))
+        self.assertFalse(app.ip_allowed("10.20.31.1"))
+        self.assertFalse(app.ip_allowed("8.8.8.8"))
 
     def test_static_and_traversal(self):
         with urllib.request.urlopen(self.base + "/") as r:

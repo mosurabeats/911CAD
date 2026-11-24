@@ -200,6 +200,15 @@ def login(req):
             db.audit(c, None, req.ip, "LOGIN_FAIL", "user", None, {"username": username, "reason": "unknown/inactive"})
             raise _Deferred(401, "Invalid username or password.")
         u = row_to_dict(u)
+        days = cfg.getint("security", "inactive_disable_days")
+        if days > 0:
+            last_use = max(x for x in (u["last_login_at"], u.get("enabled_at"), u["created_at"]) if x)
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+            if last_use < cutoff:
+                c.execute("UPDATE users SET active=0, updated_at=? WHERE id=?", (now_iso(), u["id"]))
+                c.execute("DELETE FROM sessions WHERE user_id=?", (u["id"],))
+                db.audit(c, u, req.ip, "USER_AUTO_DISABLED", "user", u["id"], {"inactive_days": days})
+                raise _Deferred(401, "Invalid username or password.")
         if u["locked_until"] and u["locked_until"] > now_iso():
             db.audit(c, u, req.ip, "LOGIN_FAIL", "user", u["id"], {"reason": "locked"})
             raise _Deferred(423, "Account is locked due to failed attempts. Try later or contact an administrator.")
@@ -262,7 +271,21 @@ def me(req):
         "idle_minutes": cfg.getint("security", "session_idle_minutes"),
         "password_min_length": cfg.getint("security", "password_min_length"),
         "version": __version__,
+        "previous_logon": previous_logon(req.app.db.conn(), u["id"]),
     }
+
+
+def previous_logon(c, user_id):
+    """CJIS previous-logon notification: last successful sign-in and failed attempts since then."""
+    logins = c.execute("SELECT id, at, ip FROM audit_log WHERE action='LOGIN' AND entity='user' AND entity_id=?"
+                       " ORDER BY id DESC LIMIT 2", (str(user_id),)).fetchall()
+    if not logins:
+        return None
+    current = logins[0]["id"]
+    prev = logins[1] if len(logins) > 1 else None
+    fails = c.execute("SELECT count(*) FROM audit_log WHERE action='LOGIN_FAIL' AND entity='user' AND entity_id=?"
+                      " AND id > ? AND id < ?", (str(user_id), prev["id"] if prev else 0, current)).fetchone()[0]
+    return {"at": prev["at"] if prev else None, "ip": prev["ip"] if prev else None, "failed_since": fails}
 
 
 def change_password(req):
@@ -897,6 +920,8 @@ def admin_update_user(req, uid):
                 f["role"] = one_of(b["role"], seed.ROLES, "role")
             if "active" in b:
                 f["active"] = 1 if b["active"] else 0
+                if f["active"] and not u["active"]:
+                    c.execute("UPDATE users SET enabled_at=? WHERE id=?", (now_iso(), uid))
             if uid == req.user["id"] and (f.get("active") == 0 or f.get("role", "admin") != "admin"):
                 raise ApiError(400, "You cannot deactivate or demote your own account.")
             detail = {k: {"from": u[k], "to": v} for k, v in f.items() if u[k] != v}

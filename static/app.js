@@ -217,7 +217,7 @@ function mfaSetupBlock(done) {
 
 async function logout() {
   try { await api("POST", "/api/logout"); } catch (_) { /* ignore */ }
-  stopPolling(); S.me = null; renderLogin("Signed out.");
+  stopPolling(); S.me = null; S.shownLogon = false; renderLogin("Signed out.");
 }
 
 // ---------------------------------------------------------------- boot & polling
@@ -232,6 +232,12 @@ async function boot() {
   S.ref = await api("GET", "/api/reference");
   S.seq = null;
   renderShell();
+  const pl = S.me.previous_logon;
+  if (pl && !S.shownLogon) {
+    S.shownLogon = true;
+    toast(pl.at ? `Last sign-in: ${fmt(pl.at)} from ${pl.ip || "unknown"}.` : "This is your first sign-in.");
+    if (pl.failed_since) toast(`${pl.failed_since} failed sign-in attempt(s) on your account since then. If that wasn't you, tell a supervisor.`, true);
+  }
   await refreshBoard();
   startPolling();
 }

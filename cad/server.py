@@ -1,4 +1,5 @@
 """HTTP(S) server: sessions, CSRF, security headers, static files, routing."""
+import ipaddress
 import json
 import logging
 import mimetypes
@@ -12,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import api, auth, seed
-from .archive import Archiver
+from .archive import Archiver, AuditMirror
 from .config import Config
 from .db import Database
 from .util import now_iso, row_to_dict
@@ -41,6 +42,12 @@ class App:
         self.db.init_schema()
         self.agency_id = self._ensure_agency()
         self.tls = bool(config.get("server", "tls_cert"))
+        nets = [n.strip() for n in config.get("server", "allowed_networks").split(",") if n.strip()]
+        try:
+            self.allowed_networks = [ipaddress.ip_network(n, strict=False) for n in nets]
+        except ValueError as e:
+            raise SystemExit(f"Invalid allowed_networks in config.ini: {e}")
+        self.audit_mirror = AuditMirror(self, config.path_of("audit", "mirror_dir"))
         self.archiver = Archiver(self, config.path_of("archive", "dir"), config.getint("archive", "interval_seconds"))
 
     def _ensure_agency(self):
@@ -59,6 +66,17 @@ class App:
                           [(aid, *d) for d in seed.DISPOSITIONS])
             self.db.audit(c, None, None, "SYSTEM_INIT", "agency", aid)
         return aid
+
+    def ip_allowed(self, ip):
+        if not self.allowed_networks:
+            return True
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        if addr.version == 6 and addr.ipv4_mapped:
+            addr = addr.ipv4_mapped
+        return any(addr in n for n in self.allowed_networks)
 
     def session_user(self, token, background):
         """Validate a session token; returns (session, user) or (None, None)."""
@@ -103,6 +121,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "InterimCAD"
     sys_version = ""
     app: App = None  # set by make_server
+    timeout = 60  # drop idle/slow connections
 
     def log_message(self, fmt, *args):
         log.info("%s %s", self.client_ip(), fmt % args)
@@ -160,6 +179,10 @@ class Handler(BaseHTTPRequestHandler):
     def _handle(self, method):
         try:
             url = urlparse(self.path)
+            if not self.app.ip_allowed(self.client_ip()):
+                log.warning("Rejected connection from %s (not in allowed_networks)", self.client_ip())
+                self._send(403, b"Forbidden", "text/plain")
+                return
             if url.path.startswith("/api/"):
                 self._api(method, url)
             elif method == "GET":
@@ -226,6 +249,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not user:
                     return self._json(401, {"error": "Not signed in", "code": "AUTH"})
                 if method != "GET" and self.headers.get("X-CSRF-Token") != sess["csrf"]:
+                    log.warning("CSRF token mismatch from %s user=%s path=%s", req.ip, user["username"], url.path)
                     return self._json(403, {"error": "Security token mismatch. Reload the page."})
                 restricted = user["must_change_pw"] or (
                     app.config.getbool("security", "require_mfa") and not user["totp_enabled"])
@@ -237,6 +261,9 @@ class Handler(BaseHTTPRequestHandler):
                 args = [int(g) for g in m.groups()]
                 result = fn(req, *args)
             except api.ApiError as e:
+                if e.status == 403 and req.user:
+                    with app.db.tx() as wc:
+                        app.db.audit(wc, req.user, req.ip, "ACCESS_DENIED", "path", f"{method} {url.path}")
                 return self._json(e.status, {"error": e.message, **e.extra})
             headers = []
             if req.set_cookie:
@@ -252,6 +279,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def make_server(config):
+    if not config.get("server", "tls_cert") and not config.getbool("server", "allow_insecure_http"):
+        raise SystemExit("TLS is required: set tls_cert and tls_key in config.ini (see `python manage.py make-cert`).\n"
+                         "For a short isolated test only, set allow_insecure_http = true.")
     app = App(config)
     handler = type("BoundHandler", (Handler,), {"app": app})
     host = config.get("server", "host")
@@ -292,12 +322,22 @@ def start_backup_thread(app, interval_minutes=60, keep=96):
 
 
 def serve(config_path):
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
-                        handlers=[logging.StreamHandler(sys.stdout)])
     config = Config(config_path)
+    handlers = [logging.StreamHandler(sys.stdout)]
+    log_file = config.path_of("storage", "log_file")
+    if log_file:
+        from logging.handlers import RotatingFileHandler
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        handlers.append(RotatingFileHandler(log_file, maxBytes=10_000_000, backupCount=20, encoding="utf-8"))
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", handlers=handlers)
     app, httpd = make_server(config)
     start_backup_thread(app)
     app.archiver.start()
+    app.audit_mirror.start()
+    if not app.allowed_networks:
+        log.warning("allowed_networks is empty: any address that can reach this port may try to sign in.")
+    if not config.getbool("security", "require_mfa"):
+        log.warning("require_mfa is false: CJIS requires multi-factor authentication for access to CJI.")
     if app.archiver.dir:
         log.info("Archiving every call to %s (every %ss)", app.archiver.dir, app.archiver.interval)
     scheme = "https" if app.tls else "http"
