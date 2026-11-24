@@ -10,3 +10,4 @@ cad-export-*.zip
 __pycache__/
 *.pyc
 .venv/
+cad-demo.html

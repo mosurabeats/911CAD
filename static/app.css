@@ -63,7 +63,7 @@ main { flex: 1; min-height: 0; display: flex; }
 
 /* Board */
 .board { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 12px; height: 100%; padding: 12px; overflow: hidden; flex: 1; }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; display: flex; flex-direction: column; min-height: 0; }
+.panel { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; display: flex; flex-direction: column; min-height: 0; }
 .panel > .head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .panel > .head h2 { margin: 0; }
 .panel > .body { overflow: auto; flex: 1; }
@@ -129,7 +129,7 @@ tr.st-CLOSED td { color: var(--muted); }
   .drawer.beside { right: 352px; width: min(900px, calc(100vw - 352px)); border-right: 1px solid var(--line); }
 }
 @media (max-width: 900px) {
-  .board { grid-template-columns: 1fr; overflow: auto; height: auto; }
+  .board { grid-template-columns: minmax(0, 1fr); overflow: auto; height: auto; }
   .panel > .body { max-height: none; }
   .narr .e { grid-template-columns: 1fr; gap: 0; }
   .hide-sm { display: none; }

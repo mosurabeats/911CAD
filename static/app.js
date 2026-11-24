@@ -25,6 +25,28 @@ function h(tag, attrs, ...kids) {
   return el;
 }
 const $ = (sel, root = document) => root.querySelector(sel);
+const DEMO = window.CAD_DEMO || null; // set only by the browser-only demo build
+function store(key, value) {
+  try {
+    if (value === undefined) return localStorage.getItem(key);
+    localStorage.setItem(key, value);
+  } catch (_) { /* storage blocked: fine */ }
+  return null;
+}
+// In-page dialogs (browser prompt()/confirm() are blocked in some kiosk and embedded browsers).
+function ask(title, { input = null, okLabel = "OK", danger = false } = {}) {
+  return new Promise((resolve) => {
+    const field_ = input ? h("input", { type: input.type || "text", value: "", autocomplete: "off", required: true }) : null;
+    const done = (v) => { closeModal(); resolve(v); };
+    const f = h("form", { onsubmit: (e) => { e.preventDefault(); done(input ? field_.value.trim() || null : true); } },
+      h("h2", {}, title),
+      input ? h("label", {}, input.label, field_) : null,
+      h("div", { class: "row", style: "margin-top:12px" },
+        h("button", { class: danger ? "danger" : "primary" }, okLabel),
+        h("button", { type: "button", onclick: () => done(input ? null : false) }, "Cancel")));
+    openModal(f);
+  });
+}
 const pad = (n) => String(n).padStart(2, "0");
 function fmt(iso, withDate = true) {
   if (!iso) return "";
@@ -153,6 +175,7 @@ function renderLogin(message) {
     h("h1", {}, "Interim CAD"),
     h("div", { class: "muted" }, "Authorized users only"),
     form,
+    DEMO && DEMO.loginHint ? h("div", { class: "sub" }, DEMO.loginHint.map((line) => h("div", {}, line))) : null,
     h("div", { class: "banner" },
       "This system contains law enforcement and criminal justice information. Access is restricted to authorized personnel " +
       "for official purposes. All activity is logged and monitored. Unauthorized access or use is prohibited and may be prosecuted.")));
@@ -279,8 +302,8 @@ function renderShell() {
   if (can("export")) views.push(["export", "Export"]);
   const nav = h("nav", {}, views.map(([v, t]) => h("button", { class: S.view === v ? "active" : "", onclick: () => setView(v) }, t)));
   const clock = h("span", { class: "clock", id: "clock" });
-  const theme = localStorage.getItem("cad-theme") || "dark";
-  document.documentElement.dataset.theme = theme;
+  const theme = store("cad-theme") || (DEMO ? null : "dark");
+  if (theme) document.documentElement.dataset.theme = theme;
   const header = h("header", { class: "top" },
     h("span", { class: "brand" }, S.me.agency.name, " CAD"),
     can("call.create") ? h("button", { class: "primary", onclick: newCallModal, title: "F2" }, "+ New Call (F2)") : null,
@@ -291,8 +314,9 @@ function renderShell() {
     h("span", { class: "muted hide-sm" }, `${S.me.user.full_name} (${S.me.user.role})`),
     h("button", { class: "small", onclick: accountModal }, "Account"),
     h("button", { class: "small", title: "Toggle light/dark", onclick: () => {
-      const t = document.documentElement.dataset.theme === "light" ? "dark" : "light";
-      document.documentElement.dataset.theme = t; try { localStorage.setItem("cad-theme", t); } catch (_) { /* */ }
+      const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      const t = cur === "light" ? "dark" : "light";
+      document.documentElement.dataset.theme = t; store("cad-theme", t);
     } }, "◐"),
     h("button", { class: "small", onclick: logout }, "Sign out"));
   const officerBar = h("div", { id: "officerbar" });
@@ -444,7 +468,7 @@ function callTypeOptions() {
 }
 function newCallModal() {
   if (!can("call.create")) return;
-  const lastCity = localStorage.getItem("cad-city") || "";
+  const lastCity = store("cad-city") || "";
   const avail = S.board.units.filter((u) => u.status === "AVAILABLE");
   const err = h("div", { class: "error" });
   const backEntry = h("details", {}, h("summary", { class: "muted" }, "Back-enter a call from a paper log (set original received time)"),
@@ -458,7 +482,7 @@ function newCallModal() {
       if (!d.priority) delete d.priority;
       try {
         const r = await api("POST", "/api/calls", d);
-        try { localStorage.setItem("cad-city", d.location_city || ""); } catch (_) { /* */ }
+        store("cad-city", d.location_city || "");
         closeModal(); toast(`Call ${r.call_number} created`);
         await refreshAll(); openCall(r.id);
       } catch (ex) { err.textContent = ex.message; }
@@ -533,7 +557,7 @@ function renderDrawer() {
     c.case_number ? h("span", {}, "Case ", h("strong", { class: "mono" }, c.case_number)) :
       can("narrative") ? h("button", { class: "small", onclick: () => act(() => api("POST", `/api/calls/${c.id}/case-number`), "Case number assigned") }, "Get case #") : null,
     h("span", { class: "grow" }),
-    h("button", { class: "small", onclick: () => window.print() }, "Print"),
+    DEMO ? null : h("button", { class: "small", onclick: () => window.print() }, "Print"),
     h("button", { class: "small", onclick: closeDrawer, title: "Esc" }, "✕ Close"));
 
   // --- details form
@@ -633,8 +657,8 @@ function renderDrawer() {
   } else if (closed && can("call.reopen")) {
     closeBlock = h("div", { class: "sub no-print" }, h("button", {
       onclick: () => {
-        const reason = prompt("Reason for reopening this call:");
-        if (reason) act(() => api("POST", `/api/calls/${c.id}/reopen`, { reason }), "Call reopened");
+        ask(`Reopen call ${c.call_number}`, { input: { label: "Reason for reopening" }, okLabel: "Reopen call" })
+          .then((reason) => reason && act(() => api("POST", `/api/calls/${c.id}/reopen`, { reason }), "Call reopened"));
       },
     }, "Reopen call"));
   }
@@ -665,7 +689,8 @@ function entityBlock(c, kind, items, cells, headers) {
     h("tbody", {}, items.length ? items.map((it) => h("tr", {}, cells(it).map((v) => h("td", {}, v)),
       h("td", { class: "no-print" }, can("entity.edit") ? [
         h("button", { class: "small", onclick: () => entityModal(c, kind, it) }, "edit"), " ",
-        h("button", { class: "small danger", onclick: () => confirm("Remove this record from the call? (It is retained in the audit history.)") && act(() => api("DELETE", `/api/${kind}/${it.id}`), "Removed") }, "remove")] : null))) :
+        h("button", { class: "small danger", onclick: () => ask("Remove this record from the call? It stays in the audit history.", { okLabel: "Remove", danger: true })
+          .then((ok) => ok && act(() => api("DELETE", `/api/${kind}/${it.id}`), "Removed")) }, "remove")] : null))) :
       h("tr", {}, h("td", { colspan: headers.length + 1, class: "muted" }, "None."))));
   return h("div", {}, tbl, can("entity.edit") ? h("button", { class: "small no-print", style: "margin-top:6px", onclick: () => entityModal(c, kind, null) },
     kind === "persons" ? "+ Add person" : "+ Add vehicle") : null);
@@ -794,9 +819,11 @@ async function adminUsers() {
         h("td", {}, !u.active ? h("span", { class: "error" }, "disabled") : u.locked ? h("span", { class: "error" }, "LOCKED") : u.must_change_pw ? "temp pw" : "active"),
         h("td", { class: "mono" }, fmtShort(u.last_login_at)),
         h("td", { class: "row" },
-          h("button", { class: "small", onclick: () => { const pw = prompt(`New temporary password for ${u.username}:`); if (pw) doAct(u, { action: "reset_password", password: pw }, "Password reset"); } }, "reset pw"),
+          h("button", { class: "small", onclick: () => ask(`Reset password for ${u.username}`, { input: { label: "New temporary password" }, okLabel: "Reset password" })
+            .then((pw) => pw && doAct(u, { action: "reset_password", password: pw }, "Password reset")) }, "reset pw"),
           u.locked ? h("button", { class: "small", onclick: () => doAct(u, { action: "unlock" }, "Unlocked") }, "unlock") : null,
-          u.totp_enabled ? h("button", { class: "small", onclick: () => confirm(`Reset MFA for ${u.username}? They will re-enroll at next sign-in.`) && doAct(u, { action: "reset_mfa" }, "MFA reset") }, "reset MFA") : null,
+          u.totp_enabled ? h("button", { class: "small", onclick: () => ask(`Reset two-factor for ${u.username}? They will re-enroll at next sign-in.`, { okLabel: "Reset", danger: true })
+            .then((ok) => ok && doAct(u, { action: "reset_mfa" }, "MFA reset")) }, "reset MFA") : null,
           h("button", { class: "small" + (u.active ? " danger" : ""), onclick: () => doAct(u, { action: "update", active: !u.active }, u.active ? "Disabled" : "Enabled") }, u.active ? "disable" : "enable")));
     })));
   return h("div", {}, tbl, f);
@@ -880,6 +907,7 @@ function exportView() {
       e.preventDefault();
       const d = formData(f);
       const qs = new URLSearchParams(Object.entries(d).filter(([, v]) => v)).toString();
+      if (DEMO) { toast("Downloads are turned off in the demo. In the real system this saves a ZIP of every record."); return; }
       window.location.href = "/api/export" + (qs ? "?" + qs : "");
       toast("Export started — check your downloads.");
     },

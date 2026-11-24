@@ -95,3 +95,7 @@ static/       browser client (vanilla JS, no external resources)
 docs/         deployment, security/CJIS, migration, roadmap
 tests/        end-to-end API tests
 ```
+
+## Demo / training page
+
+`python demo/build_demo.py cad-demo.html` builds a single self-contained page with the real screens running against an in-browser stand-in server, a fictional agency and sample calls. Nothing is saved or sent anywhere. Use it to train dispatchers before go-live. Demo accounts: `dispatch`, `officer`, `sergeant`, `records`, `admin`, all with password `demo`; any 6 digits work as the two-factor code.
