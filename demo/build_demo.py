@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Bundle the real CAD screens + the in-browser stand-in server into one self-contained demo page.
 
-    python demo/build_demo.py OUTPUT.html
+    python demo/build_demo.py OUTPUT.html               (page fragment for hosting)
+    python demo/build_demo.py OUTPUT.html --standalone  (complete file to open by double-clicking)
 
 The demo uses a fictional agency and data, keeps everything in memory, and never contacts a server.
 """
@@ -58,7 +59,14 @@ page = f"""<title>Interim CAD Demo</title>
 """
 if "</script" in read("demo", "mock.js") + read("static", "app.js"):
     sys.exit("Refusing to inline: a script contains '</script'.")
-out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "cad-demo.html")
+args = [a for a in sys.argv[1:] if not a.startswith("--")]
+if "--standalone" in sys.argv:
+    # A complete HTML document that opens by double-clicking (e.g. from an email attachment).
+    head, body = page.split("</style>\n", 1)
+    page = ('<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+            + head + '</style>\n</head>\n<body>\n' + body + '</body>\n</html>\n')
+out = args[0] if args else os.path.join(ROOT, "cad-demo.html")
 with open(out, "w", encoding="utf-8") as f:
     f.write(page)
 print(f"Wrote {out} ({len(page):,} bytes)")

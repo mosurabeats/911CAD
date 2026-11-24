@@ -1,0 +1,84 @@
+==============================================================================
+ INTERIM CAD - GUIDE FOR THE DISPATCH / CAD ADMINISTRATOR
+==============================================================================
+
+IT installs and runs the server. The administrator sets up and manages the
+CAD itself, entirely from a web browser. Nothing here requires installing
+anything.
+
+TRY IT FIRST: open CAD-Demo.html (double-click). It is a practice copy with
+a made-up agency and sample calls. Nothing is saved and nothing is sent
+anywhere. Sign in as dispatch, officer, sergeant, records or admin; the
+password for all is "demo", and any 6 digits work as the two-factor code.
+Do not type real names or plates into the demo.
+
+
+BEFORE IT INSTALLS - GIVE IT TWO THINGS
+---------------------------------------
+[ ] The administrator's name (IT creates that first account).
+[ ] The LAST call number Valcour issued this year. IT sets the CAD to
+    continue after it (e.g. 26MPD4512) so numbers never collide when the
+    records go back into Valcour. This must happen before the first real call.
+
+
+DAY ONE (about an hour)
+-----------------------
+1. SIGN IN at the address IT gives you (e.g. https://cad.mpd.local:8443).
+   Set up two-factor with an authenticator app on your phone
+   (Microsoft Authenticator, Google Authenticator, Authy...).
+
+2. ADD UNITS - Admin tab > Units: one per call sign (P1, P2, S1, K9...).
+
+3. REVIEW CALL TYPES AND DISPOSITIONS - Admin tab.
+   A standard list is preloaded. Change codes to match Valcour where you
+   can (makes moving the records back much easier). Deactivate codes you
+   don't use. Codes can't be deleted, so old records keep their meaning.
+
+4. CREATE USER ACCOUNTS - Admin tab > Users. One per person, never shared.
+     dispatcher  create, run and close calls; dispatch units
+     officer     for MDTs: own unit status, notes, persons/vehicles, case #s
+     supervisor  dispatcher + reopen calls, audit log, exports
+     records     read-only, search, export
+     admin       everything, including users and units
+   Give each a temporary password (12+ characters, mixing letters, numbers
+   and symbols) IN PERSON. They must change it and set up two-factor at
+   first sign-in.
+
+5. PRACTICE CALL. Create a call, dispatch a unit, add a note, then close it
+   with disposition CANCELLED and the note "TEST - training".
+   Calls can never be deleted, so always mark test calls clearly.
+   Then check:
+     - Export tab: the I: drive archive shows no errors
+     - the call's PDF appears in the I: drive folder within a minute
+
+6. BRIEF DISPATCHERS (5 minutes)
+     - F2 = new call. Open a call, then use the unit buttons
+       (DISP / ENR / ONS / TRN / AVL) on the unit cards.
+     - Ctrl+Enter saves a narrative entry.
+     - Sign out at end of shift. Never share accounts.
+     - Report any "failed sign-in attempts" notice you didn't cause.
+     - Never click past a certificate warning - call IT.
+     - If the CAD is down: use paper run cards, then enter them later with
+       "Back-enter a call from a paper log" in the New Call window.
+
+
+ONGOING DUTIES
+--------------
+As needed       Locked-out user:   Admin > Users > unlock
+                Forgot password:   Admin > Users > reset pw
+                Lost/new phone:    Admin > Users > reset MFA
+Same day someone leaves
+                Admin > Users > disable
+Daily           Daily call log PDF goes to the I: drive automatically.
+                Any day's log can also be downloaded: Export tab >
+                Daily call log (PDF).
+Weekly          Audit tab: should say "Audit chain verified". Look over
+                failed sign-ins, ACCESS_DENIED, EXPORT and CALL_REOPEN.
+                Export tab: confirm the I: drive copy shows no errors.
+Monthly         Review the user list; remove anyone who no longer needs it.
+When Valcour returns
+                Export tab > Download export (.zip) and give it to the
+                Valcour team (see docs\DATA_MIGRATION.md). The export
+                contains CJI - encrypted, agency-controlled media only.
+
+IT handles: the server, backups, the certificate, network access, updates.
