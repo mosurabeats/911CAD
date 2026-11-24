@@ -511,6 +511,7 @@ def close_call(req, call_id):
             add_narrative(c, req, call_id, note)
         add_narrative(c, req, call_id, f"Call closed. Disposition: {disp}", "SYSTEM")
         db.audit(c, req.user, req.ip, "CALL_CLOSE", "call", call_id, {"disposition": disp})
+    req.app.archiver.poke()
     return {"ok": True}
 
 
@@ -1073,6 +1074,25 @@ Conventions
 """
 
 
+def archive_status(req):
+    require(req, "export")
+    st = dict(req.app.archiver.status)
+    c = req.app.db.conn()
+    st["calls_total"] = c.execute("SELECT count(*) FROM calls WHERE agency_id=?", (req.app.agency_id,)).fetchone()[0]
+    st["calls_not_yet_archived"] = c.execute(
+        "SELECT count(*) FROM calls k LEFT JOIN archive_state a ON a.call_id=k.id"
+        " WHERE a.call_id IS NULL OR a.version<>k.version").fetchone()[0]
+    return st
+
+
+def archive_run(req):
+    require(req, "export")
+    if not req.app.archiver.dir:
+        raise ApiError(400, "No archive folder is configured ([archive] dir in config.ini).")
+    req.app.archiver.poke()
+    return {"ok": True}
+
+
 def export_package(req):
     require(req, "export")
     date_from = parse_iso(req.query["from"]) if req.query.get("from") else None
@@ -1184,4 +1204,6 @@ ROUTES = [
     _r("POST", r"/api/admin/dispositions", lambda req: admin_ref_save(req, "dispositions")),
     _r("GET", r"/api/audit", audit_list),
     _r("GET", r"/api/export", export_package),
+    _r("GET", r"/api/archive/status", archive_status),
+    _r("POST", r"/api/archive/run", archive_run),
 ]

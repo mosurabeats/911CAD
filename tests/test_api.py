@@ -60,6 +60,7 @@ class CadTest(unittest.TestCase):
         cfg = Config(None, {
             "server": {"host": "127.0.0.1", "port": "0"},
             "storage": {"db_path": os.path.join(cls.tmp.name, "t.sqlite3"), "backup_dir": ""},
+            "archive": {"dir": os.path.join(cls.tmp.name, "I_drive", "CAD", "Calls")},
             "security": {"require_mfa": "false", "lockout_attempts": "3"},
             "agency": {"name": "Test PD", "case_prefix": "TPD"},
         })
@@ -253,6 +254,63 @@ class CadTest(unittest.TestCase):
         for n in names:
             if n.startswith("csv/"):
                 self.assertTrue(z.read(n).decode().split("\n")[0].startswith("id"), n)
+
+    def test_archive_folder(self):
+        a = self.admin
+        r = a.call("POST", "/api/calls", {"call_type": "WELFARE", "location_address": "5 Elm St",
+                                          "narrative": "Check on elderly resident"})
+        a.call("POST", f"/api/calls/{r['id']}/persons", {"role": "SUBJECT", "last_name": "Smith", "first_name": "Ann"})
+        arch = self.app.archiver
+        self.assertGreaterEqual(arch.sweep(), 1)
+        found = [os.path.join(d, f) for d, _, fs in os.walk(arch.dir) for f in fs]
+        txt = [f for f in found if f.endswith(r["call_number"] + ".txt")][0]
+        body = open(txt, encoding="utf-8").read()
+        self.assertIn("5 Elm St", body)
+        self.assertIn("Smith, Ann", body)
+        self.assertIn("Check on elderly resident", body)
+        self.assertTrue(any(f.endswith(r["call_number"] + ".json") for f in found))
+        self.assertTrue(any(os.sep + "Daily" + os.sep in f and f.endswith(".csv") for f in found))
+        # Unchanged calls are not rewritten; a change triggers a rewrite.
+        self.assertEqual(arch.sweep(), 0)
+        a.call("POST", f"/api/calls/{r['id']}/close", {"disposition": "ASSISTED"})
+        self.assertEqual(arch.sweep(), 1)
+        self.assertIn("Disposition: ASSISTED", open(txt, encoding="utf-8").read())
+        st = a.call("GET", "/api/archive/status")
+        self.assertEqual(st["calls_not_yet_archived"], 0)
+
+    def test_concurrent_dispatchers(self):
+        """Many dispatchers working at the same moment: no errors, no duplicate call numbers, nothing lost."""
+        clients = [self.make_user(f"cdisp{i}", "dispatcher") for i in range(8)]
+        results, errors = [], []
+
+        def work(cl, n):
+            try:
+                for j in range(15):
+                    r = cl.call("POST", "/api/calls", {"call_type": "TRAFFIC", "location_address": f"{n}-{j} Main"})
+                    cl.call("POST", f"/api/calls/{r['id']}/narrative", {"text": f"note from {n}"})
+                    cl.call("GET", "/api/board")
+                    results.append(r["call_number"])
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+        threads = [threading.Thread(target=work, args=(cl, i)) for i, cl in enumerate(clients)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 8 * 15)
+        self.assertEqual(len(set(results)), len(results))
+        self.assertTrue(self.admin.call("GET", "/api/audit?limit=1")["chain_ok"])
+
+    def test_simultaneous_edit_is_detected(self):
+        a = self.admin
+        b = self.make_user("disp_b", "dispatcher")
+        cid = a.call("POST", "/api/calls", {"call_type": "LARCENY"})["id"]
+        ver = a.call("GET", f"/api/calls/{cid}")["call"]["version"]
+        b.call("PUT", f"/api/calls/{cid}", {"location_address": "10 Main", "version": ver})
+        r = a.call("PUT", f"/api/calls/{cid}", {"location_address": "12 Main", "version": ver}, expect=409)
+        self.assertIn("changed by someone else", r["error"])
 
     def test_static_and_traversal(self):
         with urllib.request.urlopen(self.base + "/") as r:

@@ -31,8 +31,9 @@ This system will store criminal justice information (CJI): names, DOBs, addresse
 5. **Patching and antivirus** on the server OS.
 6. **Audit review**: a supervisor reviews the Audit tab weekly, especially LOGIN_FAIL, EXPORT, CALL_REOPEN and USER_* events. The CJIS policy requires audit records to be kept for at least one year. Keep the database, or exports of it, for at least that long, or as long as your retention schedule requires if that is longer.
 7. **Account management**: disable accounts the same day someone leaves. Review the user list monthly.
-8. **Export handling**: export ZIPs contain CJI. Store them only on encrypted, agency-controlled media and delete them when no longer needed.
-9. **Incident response**: if you suspect a compromise, take the server off the network, preserve the database and `server.log`, and notify your CSO. That is especially relevant given that the statewide system is down because of a breach.
+8. **Archive folder (I: drive)**: if `[archive] dir` is set, every call is written as plain files on that share. Restrict the share's permissions to PD personnel only, make sure the file server is encrypted and inside the CJIS boundary, and include it in your audit and backup plans.
+9. **Export handling**: export ZIPs contain CJI. Store them only on encrypted, agency-controlled media and delete them when no longer needed.
+10. **Incident response**: if you suspect a compromise, take the server off the network, preserve the database and `server.log`, and notify your CSO. That is especially relevant given that the statewide system is down because of a breach.
 
 ## Things to deliberately not do
 

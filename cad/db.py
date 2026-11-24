@@ -212,6 +212,13 @@ CREATE TABLE IF NOT EXISTS call_vehicles (
 CREATE INDEX IF NOT EXISTS idx_veh_call ON call_vehicles(call_id);
 CREATE INDEX IF NOT EXISTS idx_veh_plate ON call_vehicles(plate);
 
+-- Tracks which version of each call has been copied to the archive folder.
+CREATE TABLE IF NOT EXISTS archive_state (
+    call_id     INTEGER PRIMARY KEY REFERENCES calls(id),
+    version     INTEGER NOT NULL,
+    archived_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS counters (
     agency_id INTEGER NOT NULL,
     year      INTEGER NOT NULL,

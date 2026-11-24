@@ -23,6 +23,10 @@ DEFAULTS = {
         "lockout_minutes": "15",
         "password_min_length": "12",
     },
+    "archive": {
+        "dir": "",
+        "interval_seconds": "30",
+    },
     "storage": {
         "db_path": "data/cad.sqlite3",
         "backup_dir": "data/backups",

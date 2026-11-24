@@ -71,6 +71,33 @@ Any modern browser (Edge, Chrome, Firefox) on dispatch consoles, desk PCs and MD
 
 MDTs in the field reach the server only through your existing agency VPN. **Do not expose port 8443 to the internet.**
 
+## 5a. Multiple dispatchers
+
+Run **one** server. Every dispatcher, supervisor and officer opens the same address in a browser, and they all see the same live board. Don't run a separate copy on each dispatch PC: each copy would be its own separate database.
+
+Tested with 8 dispatchers creating calls at the same moment: no errors, no duplicate call numbers, nothing lost. A department-sized load (a few consoles plus a dozen MDTs) is well within capacity.
+
+## 5b. Copying every call to the I: drive (network share)
+
+Set this in `config.ini`:
+```ini
+[archive]
+dir = I:\CAD\Calls
+```
+Restart the server. Every call is then written to:
+```
+I:\CAD\Calls\2026\2026-11\26-000123.txt    readable call record (prints cleanly)
+I:\CAD\Calls\2026\2026-11\26-000123.json   complete record (for import/migration)
+I:\CAD\Calls\Daily\2026-11-24.csv           that day's call log (opens in Excel)
+```
+Each call's files are updated within about 30 seconds of any change, or right away when the call is closed. The **Export** tab shows archive status and has a **Copy now** button.
+
+Important details:
+- **Mapped drive letters and services:** if the CAD runs as a Windows service (NSSM or Task Scheduler), it usually **cannot see `I:`**, because drive letters are mapped per logged-in user. Use the UNC path instead, for example `dir = \\townserver\police\CAD\Calls`. Ask IT what `I:` maps to: run `net use` in a Command Prompt. The service account needs write permission on that share.
+- **Keep the live database local.** Leave `db_path` on the server's own disk. SQLite databases on network shares can be corrupted. The I: drive copy is an archive, not the live system.
+- **Drive outages:** if the share is unreachable, dispatch continues normally. The Export tab shows the problem, and every missed call is copied automatically once the share is back.
+- **Access control:** these files contain CJI. The folder must be on an agency-controlled server and restricted to the PD security group. It must not be a town-wide share that other departments can read. See SECURITY_CJIS.md.
+
 ## 6. Backups
 
 - The server writes a consistent backup **every hour** to `backup_dir` and keeps the last 96 (4 days).

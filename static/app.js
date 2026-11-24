@@ -880,7 +880,21 @@ function exportView() {
   }, h("div", { class: "grid" }, field("Calls received from (optional)", "from", "", { type: "datetime-local" }),
     field("Calls received to (optional)", "to", "", { type: "datetime-local" })),
   h("div", { class: "row", style: "margin-top:8px" }, h("button", { class: "primary" }, "Download export (.zip)")));
-  return h("div", { class: "view" }, h("h2", {}, "Export data"),
+  const arch = h("div", { class: "sub" }, h("span", { class: "muted" }, "Loading archive status…"));
+  api("GET", "/api/archive/status").then((st) => {
+    if (!st.enabled) {
+      arch.replaceChildren(h("strong", {}, "Call archive folder: not configured."),
+        h("div", { class: "muted" }, "Set [archive] dir in config.ini (for example I:\\CAD\\Calls) to keep a copy of every call on a network drive."));
+      return;
+    }
+    arch.replaceChildren(
+      h("div", {}, h("strong", {}, "Call archive folder: "), h("span", { class: "mono" }, st.dir)),
+      h("div", { class: st.last_error ? "error" : "" }, st.last_error ? `Problem: ${st.last_error} — will retry automatically.` :
+        `Last successful copy: ${st.last_ok ? fmt(st.last_ok) : "not yet"}.`),
+      h("div", {}, `${st.calls_total} calls total · ${st.calls_not_yet_archived} waiting to be copied · ${st.written_total} files written since server start`),
+      h("button", { class: "small", style: "margin-top:6px", onclick: () => act(() => api("POST", "/api/archive/run"), "Archive copy started").then(() => setTimeout(() => setView("export"), 1500)) }, "Copy now"));
+  }).catch((e) => arch.replaceChildren(h("span", { class: "error" }, e.message)));
+  return h("div", { class: "view" }, h("h2", {}, "Export data"), arch,
     h("p", {}, "Downloads every call, narrative entry, unit time, person, vehicle, unit status change, and the audit log as JSON and CSV — " +
       "for import into Valcour when it returns or into a replacement system. Leave the dates blank to export everything."),
     h("p", { class: "muted" }, "The export contains criminal justice information. Store it only on agency-controlled, encrypted media. The export itself is recorded in the audit log."),

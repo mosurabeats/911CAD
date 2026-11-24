@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import api, auth, seed
+from .archive import Archiver
 from .config import Config
 from .db import Database
 from .util import now_iso, row_to_dict
@@ -39,6 +40,7 @@ class App:
         self.db.init_schema()
         self.agency_id = self._ensure_agency()
         self.tls = bool(config.get("server", "tls_cert"))
+        self.archiver = Archiver(self, config.path_of("archive", "dir"), config.getint("archive", "interval_seconds"))
 
     def _ensure_agency(self):
         c = self.db.conn()
@@ -294,6 +296,9 @@ def serve(config_path):
     config = Config(config_path)
     app, httpd = make_server(config)
     start_backup_thread(app)
+    app.archiver.start()
+    if app.archiver.dir:
+        log.info("Archiving every call to %s (every %ss)", app.archiver.dir, app.archiver.interval)
     scheme = "https" if app.tls else "http"
     if not app.tls:
         log.warning("TLS is NOT configured. Use only on a trusted, isolated network, and configure tls_cert/tls_key.")
