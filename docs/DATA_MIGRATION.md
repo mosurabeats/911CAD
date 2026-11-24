@@ -31,12 +31,14 @@ Each export is itself recorded in the audit log.
 1. **Freeze**: pick a cutover time. Close or clear all open calls in the interim CAD, or note which ones carry over.
 2. **Export** everything (no date range) and make a final `manage.py backup`.
 3. **Map codes**: give the vendor `call_types.csv` and `dispositions.csv` so they can map your interim codes to the permanent system's codes. Using the same codes as Valcour in the Admin tab from day one makes this trivial; ask a supervisor who knows the Valcour code table to set them.
-4. **Number collisions**: interim call and case numbers may overlap with numbers the permanent system issues. Common choices: import with a prefix (set `call_prefix` in `config.ini`, for example `I`, **before** you start taking calls), or let the vendor re-key them and keep the interim number in a cross-reference field.
+4. **Number collisions**: call numbers default to the department's format, `26MPD0001`. Valcour has already issued `26MPD` numbers this year, so **before the first interim call**, find the last call number Valcour issued and continue after it:
+   `python manage.py set-next-number call 4512` (the next call will be `26MPD4512`).
+   Leave a gap, for example jump to the next round thousand, if you're unsure of the exact last number. Alternatively, ask the Valcour administrator or vendor to reserve a block. If a number is ever already in use, the system skips it automatically, so duplicates can't happen.
 5. **Validate**: compare `export_meta.record_counts` with what was imported, and spot-check a sample of calls end to end.
 6. **Retain** the final database file and export (encrypted) according to your retention schedule. They are the source record for the outage period.
 
 ## Tip: set this up on day one
 
-- Set `call_prefix` and `case_prefix` in `config.ini` before the first call.
+- Confirm `call_number_format` / `case_number_format` in `config.ini`, then run `set-next-number` to continue from Valcour's last number, before the first call.
 - Make the call-type and disposition codes match Valcour's codes as closely as possible.
 - Ask the vendor or state early which import format they accept. If they need a specific layout (NIEM, a vendor CSV template), a converter from `export.json` is a small script.

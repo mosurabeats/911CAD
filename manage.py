@@ -7,6 +7,7 @@
   python manage.py unlock USERNAME             Clear a lockout
   python manage.py backup [PATH]               Write a consistent copy of the database
   python manage.py export [--from D] [--to D] [-o FILE.zip]   Full data export (JSON + CSV)
+  python manage.py set-next-number call|case N [--year YYYY]   Set the next number issued
   python manage.py verify-audit                Check the audit log hash chain for tampering
   python manage.py make-cert                   Print the command to create a self-signed TLS cert
 
@@ -61,6 +62,10 @@ def main():
     p.add_argument("--from", dest="date_from")
     p.add_argument("--to", dest="date_to")
     p.add_argument("-o", "--output")
+    p = sub.add_parser("set-next-number")
+    p.add_argument("kind", choices=["call", "case"])
+    p.add_argument("next", type=int)
+    p.add_argument("--year", type=int, default=datetime.now().year)
     sub.add_parser("verify-audit")
     sub.add_parser("make-cert")
     args = ap.parse_args()
@@ -127,6 +132,23 @@ def main():
         with db.tx() as c:
             db.audit(c, None, "cli", "EXPORT", "export", None, {"from": df, "to": dt, "file": out})
         print(f"Export written to {out} ({len(data):,} bytes)")
+    elif args.cmd == "set-next-number":
+        from cad.api import format_number
+        if args.next < 1:
+            print("Number must be 1 or more.")
+            return 1
+        cur = db.conn().execute("SELECT value FROM counters WHERE agency_id=? AND year=? AND kind=?",
+                                (app.agency_id, args.year, args.kind)).fetchone()
+        if cur and cur[0] >= args.next:
+            print(f"Warning: {cur[0]} {args.kind} number(s) already issued for {args.year}. Numbers already in use "
+                  "will be skipped automatically, never duplicated.")
+        with db.tx() as c:
+            c.execute("INSERT INTO counters(agency_id, year, kind, value) VALUES (?,?,?,?)"
+                      " ON CONFLICT(agency_id, year, kind) DO UPDATE SET value=excluded.value",
+                      (app.agency_id, args.year, args.kind, args.next - 1))
+            db.audit(c, None, "cli", "COUNTER_SET", "counter", f"{args.kind}-{args.year}",
+                     {"next": args.next, "previous_value": cur[0] if cur else 0})
+        print(f"Next {args.kind} number for {args.year}: {format_number(cfg, args.kind, args.year, args.next)}")
     elif args.cmd == "verify-audit":
         ok, n, bad = db.verify_audit()
         if ok:

@@ -113,7 +113,7 @@ class CadTest(unittest.TestCase):
                                           "caller_name": "Jane Roe", "caller_phone": "802-555-0100",
                                           "narrative": "Caller reports yelling next door"})
         cid = r["id"]
-        self.assertRegex(r["call_number"], r"^\d\d-\d{6}$")
+        self.assertRegex(r["call_number"], r"^\d\dMPD\d{4}$")
         d = a.call("GET", f"/api/calls/{cid}")
         self.assertEqual(d["call"]["priority"], 1)  # default priority from call type
         self.assertEqual(d["call"]["status"], "PENDING")
@@ -311,6 +311,19 @@ class CadTest(unittest.TestCase):
         b.call("PUT", f"/api/calls/{cid}", {"location_address": "10 Main", "version": ver})
         r = a.call("PUT", f"/api/calls/{cid}", {"location_address": "12 Main", "version": ver}, expect=409)
         self.assertIn("changed by someone else", r["error"])
+
+    def test_call_number_format_and_counter(self):
+        from cad.api import format_number
+        cfg = self.app.config
+        self.assertEqual(format_number(cfg, "call", 2026, 1), "26MPD0001")
+        self.assertEqual(format_number(cfg, "call", 2026, 10000), "26MPD10000")
+        # Manually setting the counter onto numbers already used never produces a duplicate.
+        a = self.admin
+        first = a.call("POST", "/api/calls", {"call_type": "OTHER"})["call_number"]
+        with self.app.db.tx() as c:
+            c.execute("UPDATE counters SET value=0 WHERE kind='call'")
+        nxt = a.call("POST", "/api/calls", {"call_type": "OTHER"})["call_number"]
+        self.assertNotEqual(first, nxt)
 
     def test_static_and_traversal(self):
         with urllib.request.urlopen(self.base + "/") as r:

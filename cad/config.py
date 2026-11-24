@@ -14,6 +14,9 @@ DEFAULTS = {
         "ori": "",
         "call_prefix": "",
         "case_prefix": "",
+        # Placeholders: {yy} {yyyy} {seq} {call_prefix} {case_prefix}; e.g. {seq:04d} = zero-padded to 4 digits.
+        "call_number_format": "{yy}MPD{seq:04d}",
+        "case_number_format": "{yy}{case_prefix}-{seq:05d}",
     },
     "security": {
         "session_idle_minutes": "30",

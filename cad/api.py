@@ -150,12 +150,33 @@ def next_number(c, agency_id, year, kind):
                      (agency_id, year, kind)).fetchone()[0]
 
 
-def format_call_number(app, year, n):
-    return f"{app.config.get('agency', 'call_prefix')}{year % 100:02d}-{n:06d}"
+def format_number(config, kind, year, n):
+    """Render a call/case number from the configured pattern, e.g. '{yy}MPD{seq:04d}' -> 26MPD0001.
+    Past 9999 a 4-digit pattern simply grows to 5 digits (26MPD10000); numbers are never truncated."""
+    return config.get("agency", f"{kind}_number_format").format(
+        yy=f"{year % 100:02d}", yyyy=str(year), seq=n,
+        call_prefix=config.get("agency", "call_prefix"), case_prefix=config.get("agency", "case_prefix"))
 
 
-def format_case_number(app, year, n):
-    return f"{year % 100:02d}{app.config.get('agency', 'case_prefix')}-{n:05d}"
+def validate_number_formats(config):
+    for kind in ("call", "case"):
+        try:
+            a, b = format_number(config, kind, 2026, 1), format_number(config, kind, 2026, 2)
+        except (KeyError, ValueError, IndexError) as e:
+            raise SystemExit(f"Invalid {kind}_number_format in config.ini: {e}. "
+                             "Allowed placeholders: {yy} {yyyy} {seq} {call_prefix} {case_prefix}")
+        if a == b:
+            raise SystemExit(f"{kind}_number_format must include {{seq}}.")
+
+
+def issue_number(c, app, year, kind):
+    """Next unused number of this kind. Skips any number already in use (e.g. after the counter was
+    set manually), so a duplicate can never be issued."""
+    col = "call_number" if kind == "call" else "case_number"
+    while True:
+        num_ = format_number(app.config, kind, year, next_number(c, app.agency_id, year, kind))
+        if not c.execute(f"SELECT 1 FROM calls WHERE {col}=?", (num_,)).fetchone():
+            return num_
 
 
 def ref_codes(c, req, table):
@@ -394,7 +415,7 @@ def create_call(req):
         if req.user["role"] == "officer":
             f["source"] = "OFFICER" if not req.body.get("source") else f["source"]
         year = local_year(received)
-        call_number = format_call_number(req.app, year, next_number(c, req.app.agency_id, year, "call"))
+        call_number = issue_number(c, req.app, year, "call")
         cols = ["agency_id", "call_number", "received_at", "created_by", "created_at", "updated_at"] + list(f)
         vals = [req.app.agency_id, call_number, received, req.user["id"], now, now] + list(f.values())
         cur = c.execute(f"INSERT INTO calls({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", vals)
@@ -482,7 +503,7 @@ def assign_case_number(req, call_id):
         if call["case_number"]:
             raise ApiError(409, f"Call already has case number {call['case_number']}.")
         year = local_year(call["received_at"])
-        cn = format_case_number(req.app, year, next_number(c, req.app.agency_id, year, "case"))
+        cn = issue_number(c, req.app, year, "case")
         c.execute("UPDATE calls SET case_number=? WHERE id=?", (cn, call_id))
         touch_call(c, call_id)
         add_narrative(c, req, call_id, f"Case number assigned: {cn}", "SYSTEM")

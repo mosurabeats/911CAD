@@ -10,7 +10,7 @@ It was built to get an agency through an outage of several weeks (for example, t
 
 | Area | Features |
 |---|---|
-| **Calls for service** | Auto-numbered calls (`26-000123`). Call type and priority, source (911, phone, walk-in, officer-initiated, etc.), location with cross street and common place, caller info, summary. Case numbers on demand (`26MPD-00042`). Dispositions. Close and reopen (reopen needs a reason). |
+| **Calls for service** | Calls numbered in the department format (`26MPD0001`, configurable). Call type and priority, source (911, phone, walk-in, officer-initiated, etc.), location with cross street and common place, caller info, summary. Case numbers on demand (`26MPD-00042`). Dispositions. Close and reopen (reopen needs a reason). |
 | **Chronology** | Append-only narrative per call. Every unit status change, assignment, priority or type change, and close is time-stamped automatically. User notes can't be edited or deleted: corrections go in as new entries. |
 | **Units** | Live status board: Available, Dispatched, En route, On scene, Transport, Busy, Out of service, Off duty. Per-call unit times (dispatched, en route, on scene, transport, cleared). Moving a unit to a new call clears it from the old one. Crew and officer sign-on. Full status history. |
 | **Persons and vehicles** | Attach complainants, victims, suspects, witnesses, drivers and others (name, DOB, address, OLN, descriptors), plus vehicles (plate, state, year, make, model, color, VIN). Removed records are kept, flagged as deleted. |
@@ -72,6 +72,7 @@ python manage.py reset-password NAME    set a temporary password
 python manage.py unlock NAME            clear a lockout
 python manage.py backup [PATH]          consistent database copy
 python manage.py export [--from 2026-11-01] [--to 2026-12-31] [-o out.zip]
+python manage.py set-next-number call N  continue numbering from Valcour's last number
 python manage.py verify-audit           detect audit-log tampering
 python manage.py make-cert              show how to create a TLS certificate
 ```

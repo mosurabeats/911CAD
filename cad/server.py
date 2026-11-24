@@ -36,6 +36,7 @@ SECURITY_HEADERS = {
 class App:
     def __init__(self, config):
         self.config = config
+        api.validate_number_formats(config)
         self.db = Database(config.path_of("storage", "db_path"))
         self.db.init_schema()
         self.agency_id = self._ensure_agency()
