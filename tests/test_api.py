@@ -374,7 +374,12 @@ class CadTest(unittest.TestCase):
     def test_tls_required_and_network_allowlist(self):
         from cad.server import App
         with self.assertRaises(SystemExit):
-            make_server(Config(None, {"storage": {"db_path": os.path.join(self.tmp.name, "x.sqlite3")}}))
+            make_server(Config(None, {"storage": {"db_path": os.path.join(self.tmp.name, "x.sqlite3")},
+                                      "server": {"host": "0.0.0.0", "port": "0"}}))
+        # Single-PC mode (loopback only) runs without a certificate.
+        _, local = make_server(Config(None, {"storage": {"db_path": os.path.join(self.tmp.name, "z.sqlite3")},
+                                             "server": {"host": "127.0.0.1", "port": "0"}}))
+        local.server_close()
         app = App(Config(None, {"storage": {"db_path": os.path.join(self.tmp.name, "y.sqlite3")},
                                 "server": {"allowed_networks": "10.20.30.0/24, 127.0.0.1/32"}}))
         self.assertTrue(app.ip_allowed("10.20.30.44"))

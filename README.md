@@ -27,6 +27,10 @@ There are **no third-party dependencies**: Python 3.10+ standard library only, a
 
 ## Quick start
 
+**Just one computer?** See [docs/SINGLE_PC.md](docs/SINGLE_PC.md): install Python, then double-click `start-cad.bat` (Windows) or `start-cad.command` (Mac). Guided setup runs the first time.
+
+**Shared by several dispatchers:**
+
 ```bash
 # 1. Install Python 3.10+ (Windows: python.org installer, check "Add to PATH")
 # 2. Get this folder onto the server PC, then:

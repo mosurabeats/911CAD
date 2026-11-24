@@ -278,10 +278,20 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(404, {"error": "Not found"})
 
 
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def is_local_only(config):
+    """True when the server listens only on this computer's loopback interface (single-PC mode).
+    Traffic then never leaves the machine, so TLS is not needed."""
+    return config.get("server", "host").strip().lower() in LOOPBACK_HOSTS
+
+
 def make_server(config):
-    if not config.get("server", "tls_cert") and not config.getbool("server", "allow_insecure_http"):
+    if (not config.get("server", "tls_cert") and not config.getbool("server", "allow_insecure_http")
+            and not is_local_only(config)):
         raise SystemExit("TLS is required: set tls_cert and tls_key in config.ini (see `python manage.py make-cert`).\n"
-                         "For a short isolated test only, set allow_insecure_http = true.")
+                         "For use on this one computer only, set host = 127.0.0.1 instead.")
     app = App(config)
     handler = type("BoundHandler", (Handler,), {"app": app})
     host = config.get("server", "host")
@@ -321,7 +331,7 @@ def start_backup_thread(app, interval_minutes=60, keep=96):
     threading.Thread(target=loop, daemon=True, name="backup").start()
 
 
-def serve(config_path):
+def serve(config_path, open_browser=False):
     config = Config(config_path)
     handlers = [logging.StreamHandler(sys.stdout)]
     log_file = config.path_of("storage", "log_file")
@@ -334,16 +344,23 @@ def serve(config_path):
     start_backup_thread(app)
     app.archiver.start()
     app.audit_mirror.start()
-    if not app.allowed_networks:
+    if not app.allowed_networks and not is_local_only(config):
         log.warning("allowed_networks is empty: any address that can reach this port may try to sign in.")
     if not config.getbool("security", "require_mfa"):
         log.warning("require_mfa is false: CJIS requires multi-factor authentication for access to CJI.")
     if app.archiver.dir:
         log.info("Archiving every call to %s (every %ss)", app.archiver.dir, app.archiver.interval)
     scheme = "https" if app.tls else "http"
-    if not app.tls:
+    if is_local_only(config):
+        log.info("Single-PC mode: only this computer can open the CAD.")
+    elif not app.tls:
         log.warning("TLS is NOT configured. Use only on a trusted, isolated network, and configure tls_cert/tls_key.")
-    log.info("Interim CAD listening on %s://%s:%s", scheme, config.get("server", "host"), config.get("server", "port"))
+    host = config.get("server", "host")
+    url = f"{scheme}://{'localhost' if host in ('0.0.0.0', '127.0.0.1', '::1') else host}:{httpd.server_address[1]}/"
+    log.info("Interim CAD running at %s  (keep this window open; close it to stop the CAD)", url)
+    if open_browser:
+        import webbrowser
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

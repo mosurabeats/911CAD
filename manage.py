@@ -44,11 +44,87 @@ def prompt_password(cfg, username):
         return pw
 
 
+def ask(question, default=""):
+    ans = input(f"{question}" + (f" [{default}]" if default else "") + ": ").strip()
+    return ans or default
+
+
+def setup_single_pc(config_path):
+    """Guided setup: config for this computer only, first administrator, starting call number."""
+    print("\n=== Interim CAD setup (this computer only) ===\n")
+    if os.path.exists(config_path):
+        print(f"A configuration already exists at {config_path}.")
+        if ask("Keep it and only add an administrator / call number? (y/n)", "y").lower() != "y":
+            print("Setup cancelled. Delete or rename config.ini first if you want to start over.")
+            return 1
+    else:
+        with open(os.path.join(HERE, "config.example.ini"), encoding="utf-8") as f:
+            text = f.read()
+        agency = ask("Agency name", "Montpelier Police Department")
+        prefix = ask("Letters in your call numbers (26MPD0001 -> MPD)", "MPD").upper()
+        import re as _re
+        subs = {
+            r"(?m)^host = .*$": "host = 127.0.0.1",
+            r"(?m)^port = .*$": "port = 8080",
+            r"(?m)^tls_cert = .*$": "tls_cert =",
+            r"(?m)^tls_key = .*$": "tls_key =",
+            r"(?m)^name = .*$": f"name = {agency}",
+            r"(?m)^call_number_format = .*$": "call_number_format = {yy}" + prefix + "{seq:04d}",
+            r"(?m)^case_prefix = .*$": f"case_prefix = {prefix}",
+        }
+        for pat, val in subs.items():
+            text = _re.sub(pat, lambda _m, v=val: v, text)
+        archive = ask("Folder to keep a copy of every call in (e.g. I:\\CAD\\Calls), or leave blank", "")
+        if archive:
+            text = _re.sub(r"(?m)^dir =.*$", lambda _m: f"dir = {archive}", text, count=1)
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        print(f"\nSaved settings to {config_path}")
+
+    cfg = Config(config_path)
+    app = App(cfg)
+    db = app.db
+    if not db.conn().execute("SELECT 1 FROM users WHERE role='admin' AND active=1").fetchone():
+        print("\nCreate your administrator account (you will use this to sign in).")
+        username = ask("Username", getpass.getuser().lower())
+        full = ask("Your full name", username)
+        pw = prompt_password(cfg, username)
+        now = now_iso()
+        with db.tx() as c:
+            uid = c.execute("INSERT INTO users(agency_id, username, full_name, role, pw_hash, must_change_pw,"
+                            " created_at, updated_at) VALUES (?,?,?,?,?,0,?,?)",
+                            (app.agency_id, username, full, "admin", auth.hash_password(pw), now, now)).lastrowid
+            db.audit(c, None, "cli", "USER_CREATE", "user", uid, {"username": username, "role": "admin"})
+        print(f"Administrator '{username}' created.")
+
+    year = datetime.now().year
+    issued = db.conn().execute("SELECT value FROM counters WHERE agency_id=? AND year=? AND kind='call'",
+                               (app.agency_id, year)).fetchone()
+    if not issued:
+        from cad.api import format_number
+        print(f"\nValcour has already used call numbers this year. To avoid duplicates when the data goes back,")
+        print("continue after Valcour's last number. Leave blank to start at 1.")
+        nxt = ask("Next call number to use (just the number, e.g. 4512)", "")
+        if nxt.isdigit() and int(nxt) > 1:
+            with db.tx() as c:
+                c.execute("INSERT INTO counters(agency_id, year, kind, value) VALUES (?,?,?,?)",
+                          (app.agency_id, year, "call", int(nxt) - 1))
+                db.audit(c, None, "cli", "COUNTER_SET", "counter", f"call-{year}", {"next": int(nxt)})
+        print("First call number will be " + format_number(cfg, "call", year, int(nxt) if nxt.isdigit() else 1))
+
+    print("\nSetup complete. Start the CAD by double-clicking the start file")
+    print("(Windows: start-cad.bat   Mac: start-cad.command), or run: python manage.py serve --open")
+    print("At first sign-in you'll set up two-factor with an authenticator app on your phone.\n")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="Interim CAD management")
     ap.add_argument("--config", default=os.path.join(HERE, "config.ini"))
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("serve")
+    p = sub.add_parser("serve")
+    p.add_argument("--open", action="store_true", help="open the CAD in the browser once it starts")
+    sub.add_parser("setup", help="guided first-time setup for use on this one computer")
     p = sub.add_parser("create-admin")
     p.add_argument("username")
     p.add_argument("--full-name", default=None)
@@ -70,13 +146,15 @@ def main():
     sub.add_parser("make-cert")
     args = ap.parse_args()
 
+    if args.cmd == "setup":
+        return setup_single_pc(args.config)
     if not os.path.exists(args.config) and args.cmd != "make-cert":
         print(f"Config file not found: {args.config}\nCopy config.example.ini to config.ini and edit it first.")
         return 2
     cfg = Config(args.config)
 
     if args.cmd == "serve":
-        serve(args.config)
+        serve(args.config, open_browser=args.open)
         return 0
     if args.cmd == "make-cert":
         print("Create a self-signed certificate (replace cad.local / IP with your server's name and address):\n")
