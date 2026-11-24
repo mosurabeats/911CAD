@@ -1,0 +1,12 @@
+# Local configuration and ALL data (contains criminal justice information) - never commit.
+config.ini
+data/
+*.sqlite3
+*.sqlite3-*
+*.key
+*.crt
+*.pem
+cad-export-*.zip
+__pycache__/
+*.pyc
+.venv/
