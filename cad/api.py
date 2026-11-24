@@ -1139,6 +1139,22 @@ def archive_run(req):
     return {"ok": True}
 
 
+def export_daily_pdf(req):
+    require(req, "export")
+    from .archive import daily_pdf, daily_rows
+    day = req.query.get("date") or datetime.now().strftime("%Y-%m-%d")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+        raise ApiError(400, "Date must be YYYY-MM-DD.")
+    try:
+        rows = daily_rows(req.app.db.conn(), req.app.agency_id, day)
+    except ValueError:
+        raise ApiError(400, "Invalid date.")
+    data = daily_pdf(req.app, day, rows)
+    with req.app.db.tx() as c:
+        req.app.db.audit(c, req.user, req.ip, "EXPORT_DAILY_PDF", "export", day, {"calls": len(rows)})
+    return RawResponse(data, "application/pdf", f"daily-call-log-{day}.pdf")
+
+
 def export_package(req):
     require(req, "export")
     date_from = parse_iso(req.query["from"]) if req.query.get("from") else None
@@ -1250,6 +1266,7 @@ ROUTES = [
     _r("POST", r"/api/admin/dispositions", lambda req: admin_ref_save(req, "dispositions")),
     _r("GET", r"/api/audit", audit_list),
     _r("GET", r"/api/export", export_package),
+    _r("GET", r"/api/export/daily-pdf", export_daily_pdf),
     _r("GET", r"/api/archive/status", archive_status),
     _r("POST", r"/api/archive/run", archive_run),
 ]

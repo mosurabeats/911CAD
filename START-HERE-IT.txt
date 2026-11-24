@@ -12,7 +12,9 @@ everything so it can be exported back into Valcour or a replacement later.
   * One server (or one always-on PC) runs the program.
   * Dispatch PCs and in-car MDTs use it in a web browser over HTTPS.
     NOTHING is installed on the dispatch PCs or MDTs.
-  * Every call is also copied automatically to a network folder (the I: drive).
+  * Every call is also copied automatically to a network folder (the I: drive)
+    as a printable PDF, a text record and a data file, plus a daily PDF and
+    CSV call log for each day.
 
    Dispatch PCs --+
    Desk PCs ------+--- HTTPS (port 8443) on PD network ---> CAD server
@@ -140,7 +142,8 @@ GO-LIVE CHECKS (do all, keep a copy)
 [ ] http:// (without the s) does not work.
 [ ] A new user is forced to change password AND set up two-factor.
 [ ] 5 wrong passwords lock the account; the Audit tab shows it, chain verified.
-[ ] A test call appears as files in the I: drive archive within a minute.
+[ ] A test call appears in the I: drive archive within a minute
+    (.pdf, .txt, .json), and Daily\<date>.pdf / .csv are there too.
 [ ] A non-PD town user cannot open the archive or audit-mirror folders.
 [ ] RESTORE TEST: copy a file from C:\InterimCAD\data\backups to a spare PC
     and start the CAD from it.

@@ -35,6 +35,8 @@ DEFAULTS = {
     "archive": {
         "dir": "",
         "interval_seconds": "30",
+        # Also write a PDF per call and a daily PDF call log.
+        "pdf": "true",
     },
     "audit": {
         # Second, append-only copy of the audit log (JSON lines) on another machine/share.

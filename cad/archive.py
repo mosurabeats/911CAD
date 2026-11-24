@@ -19,6 +19,7 @@ import threading
 import time
 from datetime import datetime
 
+from .pdf import text_pdf
 from .util import now_iso, rows_to_list, row_to_dict
 
 log = logging.getLogger("cad.archive")
@@ -39,10 +40,15 @@ def safe_name(s):
 
 
 def atomic_write(path, data):
+    """Write via a temp file then rename, so a reader never sees a half-written file."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="") as f:
-        f.write(data)
+    if isinstance(data, bytes):
+        with open(tmp, "wb") as f:
+            f.write(data)
+    else:
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            f.write(data)
     os.replace(tmp, path)
 
 
@@ -127,11 +133,49 @@ def render_text(rec, agency):
     return "\r\n".join(L) + "\r\n"
 
 
+def daily_rows(c, agency_id, day):
+    """Calls received on a local calendar day (YYYY-MM-DD), with unit summary columns."""
+    from .util import parse_iso
+    start = datetime.strptime(day, "%Y-%m-%d").astimezone()
+    end = start.replace(hour=23, minute=59, second=59)
+    return c.execute(
+        """SELECT k.*,
+             (SELECT group_concat(DISTINCT unit_code) FROM call_units cu WHERE cu.call_id=k.id) AS units,
+             (SELECT min(dispatched_at) FROM call_units cu WHERE cu.call_id=k.id) AS first_disp,
+             (SELECT min(onscene_at) FROM call_units cu WHERE cu.call_id=k.id) AS first_ons
+           FROM calls k WHERE k.agency_id=? AND k.received_at BETWEEN ? AND ? ORDER BY k.received_at""",
+        (agency_id, parse_iso(start.isoformat()), parse_iso(end.isoformat()))).fetchall()
+
+
+def daily_pdf(app, day, rows):
+    """One-page-per-~40-calls daily call log, landscape."""
+    agency = app.config.get("agency", "name")
+    date_label = datetime.strptime(day, "%Y-%m-%d").strftime("%A, %B %d, %Y")
+    head = f"{'CALL #':<12} {'RECEIVED':<8} {'TYPE':<9} {'P':<1} {'LOCATION':<34} {'UNITS':<12} {'ON SCENE':<8} {'CLOSED':<8} {'DISP / STATUS':<11} {'CASE #':<12}"
+    lines = [f"{len(rows)} call(s) received.  Times are local.", "", head, "-" * len(head)]
+    for k in rows:
+        loc = ", ".join(x for x in (k["location_address"] or k["location_common"], k["location_city"]) if x)
+        lines.append(
+            f"{k['call_number']:<12} {local(k['received_at'], '%H:%M:%S'):<8} {k['call_type'][:9]:<9} {k['priority']:<1} "
+            f"{loc[:34]:<34} {(k['units'] or '-')[:12]:<12} {local(k['first_ons'], '%H:%M:%S') or '-':<8} "
+            f"{local(k['closed_at'], '%H:%M:%S') or '-':<8} {(k['disposition'] or k['status'])[:11]:<11} {k['case_number'] or '':<12}")
+    if not rows:
+        lines.append("(no calls)")
+    by_type = {}
+    for k in rows:
+        by_type[k["call_type"]] = by_type.get(k["call_type"], 0) + 1
+    if by_type:
+        lines += ["", "CALLS BY TYPE: " + "   ".join(f"{t} {n}" for t, n in sorted(by_type.items(), key=lambda x: -x[1]))]
+    lines += ["", f"Generated {local(now_iso())} from the Interim CAD database (source of record)."]
+    return text_pdf(lines, f"{agency} - Daily Call Log - {date_label}", landscape=True)
+
+
 class Archiver:
     def __init__(self, app, directory, interval_seconds=30):
         self.app = app
         self.dir = directory
         self.interval = interval_seconds
+        self.pdf = app.config.getbool("archive", "pdf")
         self.status = {"enabled": bool(directory), "dir": directory, "last_ok": None, "last_error": None,
                        "pending": None, "written_total": 0}
         self._wake = threading.Event()
@@ -178,7 +222,10 @@ class Archiver:
             rec = load_call(c, r["id"])
             month = local(rec["received_at"], "%Y-%m")
             base = os.path.join(self.dir, month[:4], month, safe_name(rec["call_number"]))
-            atomic_write(base + ".txt", render_text(rec, agency))
+            text = render_text(rec, agency)
+            atomic_write(base + ".txt", text)
+            if self.pdf:
+                atomic_write(base + ".pdf", text_pdf(text.split("\r\n"), f"{agency} - Call {rec['call_number']}"))
             atomic_write(base + ".json", json.dumps(rec, indent=1, default=str))
             days.add(local(rec["received_at"], "%Y-%m-%d"))
             with db.write_lock:  # not via tx(): archive bookkeeping must not trigger board refreshes
@@ -193,17 +240,7 @@ class Archiver:
         return written
 
     def write_daily(self, c, day):
-        start = datetime.strptime(day, "%Y-%m-%d").astimezone()
-        end = start.replace(hour=23, minute=59, second=59)
-        z = lambda d: d.astimezone().isoformat()  # noqa: E731
-        from .util import parse_iso
-        rows = c.execute(
-            """SELECT k.*,
-                 (SELECT group_concat(DISTINCT unit_code) FROM call_units cu WHERE cu.call_id=k.id) AS units,
-                 (SELECT min(dispatched_at) FROM call_units cu WHERE cu.call_id=k.id) AS first_disp,
-                 (SELECT min(onscene_at) FROM call_units cu WHERE cu.call_id=k.id) AS first_ons
-               FROM calls k WHERE k.received_at BETWEEN ? AND ? ORDER BY k.received_at""",
-            (parse_iso(z(start)), parse_iso(z(end)))).fetchall()
+        rows = daily_rows(c, self.app.agency_id, day)
         out = io.StringIO()
         wr = csv.writer(out)
         wr.writerow(DAILY_COLS)
@@ -213,6 +250,8 @@ class Archiver:
                          k["location_common"] or "", k["caller_name"] or "", k["caller_phone"] or "", k["units"] or "",
                          local(k["first_disp"]), local(k["first_ons"]), local(k["closed_at"]), k["disposition"] or ""])
         atomic_write(os.path.join(self.dir, "Daily", f"{day}.csv"), out.getvalue())
+        if self.pdf:
+            atomic_write(os.path.join(self.dir, "Daily", f"{day}.pdf"), daily_pdf(self.app, day, rows))
 
 
 class AuditMirror:

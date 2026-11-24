@@ -928,7 +928,18 @@ function exportView() {
       h("div", {}, `${st.calls_total} calls total · ${st.calls_not_yet_archived} waiting to be copied · ${st.written_total} files written since server start`),
       h("button", { class: "small", style: "margin-top:6px", onclick: () => act(() => api("POST", "/api/archive/run"), "Archive copy started").then(() => setTimeout(() => setView("export"), 1500)) }, "Copy now"));
   }).catch((e) => arch.replaceChildren(h("span", { class: "error" }, e.message)));
-  return h("div", { class: "view" }, h("h2", {}, "Export data"), arch,
+  const today = new Date();
+  const dayInput = h("input", { type: "date", id: "daily-date", value: `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}` });
+  const daily = h("div", { class: "sub" },
+    h("h3", { style: "margin-top:0" }, "Daily call log (PDF)"),
+    h("div", { class: "row" }, h("label", {}, "Day", dayInput),
+      h("button", { class: "primary", style: "align-self:flex-end", onclick: () => {
+        if (!dayInput.value) return;
+        window.location.href = "/api/export/daily-pdf?date=" + encodeURIComponent(dayInput.value);
+        toast("Downloading the daily call log…");
+      } }, "Download PDF")),
+    h("div", { class: "muted" }, "Lists every call received that day with units, on-scene and closed times, and dispositions."));
+  return h("div", { class: "view" }, h("h2", {}, "Export data"), arch, daily,
     h("p", {}, "Downloads every call, narrative entry, unit time, person, vehicle, unit status change, and the audit log as JSON and CSV — " +
       "for import into Valcour when it returns or into a replacement system. Leave the dates blank to export everything."),
     h("p", { class: "muted" }, "The export contains criminal justice information. Store it only on agency-controlled, encrypted media. The export itself is recorded in the audit log."),

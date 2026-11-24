@@ -276,6 +276,26 @@ class CadTest(unittest.TestCase):
         a.call("POST", f"/api/calls/{r['id']}/close", {"disposition": "ASSISTED"})
         self.assertEqual(arch.sweep(), 1)
         self.assertIn("Disposition: ASSISTED", open(txt, encoding="utf-8").read())
+        # PDFs: one per call and a daily call log, readable by an independent PDF reader.
+        pdf_call = txt[:-4] + ".pdf"
+        self.assertTrue(os.path.exists(pdf_call))
+        daily_pdfs = [f for f in found if os.sep + "Daily" + os.sep in f and f.endswith(".pdf")]
+        self.assertTrue(daily_pdfs)
+        try:
+            import pypdf
+        except ImportError:
+            pypdf = None
+        if pypdf:
+            text = "".join(p.extract_text() for p in pypdf.PdfReader(pdf_call).pages)
+            self.assertIn("5 Elm St", text)
+            self.assertIn("Smith, Ann", text)
+            self.assertIn("ASSISTED", text)
+            daily = "".join(p.extract_text() for p in pypdf.PdfReader(daily_pdfs[0]).pages)
+            self.assertIn(r["call_number"], daily)
+        today = __import__("datetime").datetime.now().strftime("%Y-%m-%d")
+        pdf = a.call("GET", f"/api/export/daily-pdf?date={today}", raw=True)
+        self.assertTrue(pdf.startswith(b"%PDF"))
+        a.call("GET", "/api/export/daily-pdf?date=bad", expect=400)
         st = a.call("GET", "/api/archive/status")
         self.assertEqual(st["calls_not_yet_archived"], 0)
 
@@ -387,6 +407,20 @@ class CadTest(unittest.TestCase):
         self.assertTrue(app.ip_allowed("::ffff:10.20.30.5"))
         self.assertFalse(app.ip_allowed("10.20.31.1"))
         self.assertFalse(app.ip_allowed("8.8.8.8"))
+
+    def test_pdf_long_record_paginates(self):
+        from cad.pdf import text_pdf
+        lines = [f"  2026-11-24 14:{i % 60:02d}:00  dispatch       " + "Long narrative entry with special chars ( ) \\ \u2014 \u2192 " * 4
+                 for i in range(200)]
+        data = text_pdf(lines, "Test")
+        self.assertTrue(data.startswith(b"%PDF-1.4") and data.rstrip().endswith(b"%%EOF"))
+        try:
+            import pypdf
+        except ImportError:
+            return
+        reader = pypdf.PdfReader(io.BytesIO(data))
+        self.assertGreater(len(reader.pages), 5)
+        self.assertIn("Page 1 of", reader.pages[0].extract_text())
 
     def test_static_and_traversal(self):
         with urllib.request.urlopen(self.base + "/") as r:
