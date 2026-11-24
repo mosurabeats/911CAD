@@ -86,8 +86,10 @@ dir = I:\CAD\Calls
 ```
 Restart the server. Every call is then written to:
 ```
-I:\CAD\Calls\2026\2026-11\26-000123.txt    readable call record (prints cleanly)
-I:\CAD\Calls\2026\2026-11\26-000123.json   complete record (for import/migration)
+I:\CAD\Calls\2026\2026-11\26MPD0123.pdf    printable call record
+I:\CAD\Calls\2026\2026-11\26MPD0123.txt    the same record as plain text
+I:\CAD\Calls\2026\2026-11\26MPD0123.json   complete record (for import/migration)
+I:\CAD\Calls\Daily\2026-11-24.pdf           that day's call log (printable)
 I:\CAD\Calls\Daily\2026-11-24.csv           that day's call log (opens in Excel)
 ```
 Each call's files are updated within about 30 seconds of any change, or right away when the call is closed. The **Export** tab shows archive status and has a **Copy now** button.
