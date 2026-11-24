@@ -36,9 +36,9 @@ function store(key, value) {
 // In-page dialogs (browser prompt()/confirm() are blocked in some kiosk and embedded browsers).
 function ask(title, { input = null, okLabel = "OK", danger = false } = {}) {
   return new Promise((resolve) => {
-    const field_ = input ? h("input", { type: input.type || "text", value: "", autocomplete: "off", required: true }) : null;
+    const field_ = input ? h("input", { type: input.type || "text", value: "", autocomplete: "off", required: !input.optional }) : null;
     const done = (v) => { closeModal(); resolve(v); };
-    const f = h("form", { onsubmit: (e) => { e.preventDefault(); done(input ? field_.value.trim() || null : true); } },
+    const f = h("form", { onsubmit: (e) => { e.preventDefault(); done(input ? (field_.value.trim() || (input.optional ? "" : null)) : true); } },
       h("h2", {}, title),
       input ? h("label", {}, input.label, field_) : null,
       h("div", { class: "row", style: "margin-top:12px" },
@@ -89,13 +89,18 @@ function formData(form) {
 }
 function field(lbl, name, value, opts = {}) {
   let input;
-  if (opts.options) {
+  const mkOpt = (o) => {
+    const [v, t] = Array.isArray(o) ? o : [o, label(o)];
+    return h("option", { value: v, selected: String(v) === String(value ?? "") }, t);
+  };
+  if (opts.groups) {
     input = h("select", { name, required: opts.required },
       opts.blank !== false ? h("option", { value: "" }, opts.blank || "") : null,
-      opts.options.map((o) => {
-        const [v, t] = Array.isArray(o) ? o : [o, label(o)];
-        return h("option", { value: v, selected: String(v) === String(value ?? "") }, t);
-      }));
+      opts.groups.filter(([, items]) => items.length).map(([g, items]) => h("optgroup", { label: g }, items.map(mkOpt))));
+  } else if (opts.options) {
+    input = h("select", { name, required: opts.required },
+      opts.blank !== false ? h("option", { value: "" }, opts.blank || "") : null,
+      opts.options.map(mkOpt));
   } else if (opts.textarea) {
     input = h("textarea", { name, rows: opts.rows || 3, maxlength: opts.max }, value ?? "");
   } else {
@@ -368,17 +373,30 @@ function renderOfficerBar() {
 }
 
 // ---------------------------------------------------------------- board
+const DISC_LABEL = { POLICE: "Police", FIRE: "Fire", EMS: "EMS" };
+const discOf = (x) => (x && x.discipline) || "POLICE";
+const discTag = (x) => h("span", { class: `disc d-${discOf(x)}`, title: DISC_LABEL[discOf(x)] }, discOf(x) === "POLICE" ? "PD" : discOf(x) === "FIRE" ? "FD" : "EMS");
+function discFilterBar() {
+  const cur = S.disc || "ALL";
+  return h("div", { class: "row discbar", role: "group", "aria-label": "Show" },
+    [["ALL", "All"], ["POLICE", "Police"], ["FIRE", "Fire"], ["EMS", "EMS"]].map(([v, t]) =>
+      h("button", { class: "small" + (cur === v ? " primary" : ""), "aria-pressed": cur === v ? "true" : "false",
+        onclick: () => { S.disc = v; store("cad-disc", v); renderBoard(); } }, t)));
+}
+
 function renderBoard() {
   const main = $("#main");
   if (!main || S.view !== "board") return;
-  const calls = S.board.calls || [];
+  if (S.disc === undefined) S.disc = store("cad-disc") || "ALL";
+  const shown = (x) => S.disc === "ALL" || discOf(x) === S.disc;
+  const calls = (S.board.calls || []).filter(shown);
   const open = calls.filter((c) => c.status !== "CLOSED");
   const closed = calls.filter((c) => c.status === "CLOSED");
   const callRow = (c) => h("tr", { class: `click st-${c.status}` + (c.id === S.callId ? " selected" : ""), onclick: () => openCall(c.id) },
     h("td", {}, h("span", { class: `prio prio-${c.priority}` }, c.priority)),
     h("td", { class: "mono" }, c.call_number),
     h("td", {}, h("span", { class: `badge b-${c.status}` }, c.status)),
-    h("td", {}, c.call_type),
+    h("td", {}, discTag(c), " ", c.call_type),
     h("td", {}, [c.location_address || c.location_common || "", c.location_city ? `, ${c.location_city}` : ""]),
     h("td", { class: "mono" }, c.units || (c.status === "PENDING" ? h("span", { class: "error" }, "—") : "")),
     h("td", { class: "mono hide-sm" }, fmtShort(c.received_at)),
@@ -388,15 +406,16 @@ function renderBoard() {
   const pending = open.filter((c) => c.status === "PENDING").length;
   const callsPanel = h("section", { class: "panel" },
     h("div", { class: "head" }, h("h2", {}, "Calls"),
-      h("span", { class: "muted" }, `${open.length} open`, pending ? h("span", { class: "error" }, ` · ${pending} pending`) : "")),
+      h("span", { class: "muted" }, `${open.length} open`, pending ? h("span", { class: "error" }, ` · ${pending} pending`) : ""),
+      h("span", { class: "grow" }), discFilterBar()),
     h("div", { class: "body" },
       h("table", {}, h("thead", {}, head), h("tbody", {}, open.length ? open.map(callRow) : h("tr", {}, h("td", { colspan: 8, class: "muted" }, "No open calls.")))),
       h("h3", { style: "padding: 0 8px" }, `Closed — last ${S.board.closed_window_hours || 12} hours`),
       h("table", {}, h("tbody", {}, closed.length ? closed.map(callRow) : h("tr", {}, h("td", { class: "muted" }, "None."))))));
-  const units = S.board.units || [];
+  const units = (S.board.units || []).filter(shown);
   const unitsPanel = h("section", { class: "panel" },
     h("div", { class: "head" }, h("h2", {}, "Units"),
-      h("span", { class: "muted" }, `${units.filter((u) => u.status === "AVAILABLE").length} available`)),
+      h("span", { class: "muted" }, `${units.filter((u) => u.status === "AVAILABLE" || u.status === "IN_QUARTERS").length} available`)),
     h("div", { class: "body" }, h("div", { class: "units" }, units.length ? units.map(unitCard) :
       h("div", { class: "muted" }, can("unit.manage") ? "No units yet. Add them under Admin → Units." : "No units configured."))));
   main.replaceChildren(h("div", { class: "board" }, callsPanel, unitsPanel));
@@ -406,6 +425,7 @@ function unitCard(u) {
   return h("div", { class: `unit us-${u.status}` },
     h("div", { class: "top" },
       h("span", { class: "ucode" }, u.unit_code),
+      discTag(u),
       h("span", { class: `st t-${u.status}` }, label(u.status)),
       h("span", { class: "grow" }),
       h("span", { class: "muted mono", style: "font-size:11px" }, u.status_at ? fmtShort(u.status_at) : "")),
@@ -416,12 +436,14 @@ function unitCard(u) {
     can("unit.status.any") ? unitButtons(u) : null);
 }
 
-const STATUS_BTNS = [["DISPATCHED", "DISP"], ["ENROUTE", "ENR"], ["ONSCENE", "ONS"], ["TRANSPORT", "TRN"], ["AVAILABLE", "AVL"], ["BUSY", "BUSY"], ["OUT_OF_SERVICE", "OOS"], ["OFF_DUTY", "OFF"]];
+const STATUS_BTNS = [["DISPATCHED", "DISP"], ["ENROUTE", "ENR"], ["ONSCENE", "ONS"], ["TRANSPORT", "TRN"], ["AT_HOSPITAL", "HOSP", ["EMS"]],
+  ["AVAILABLE", "AVL"], ["IN_QUARTERS", "QTRS", ["FIRE", "EMS"]], ["BUSY", "BUSY"], ["OUT_OF_SERVICE", "OOS"], ["OFF_DUTY", "OFF"]];
 function unitButtons(u) {
   const selectedOpen = S.callId && S.detail && S.detail.call.status !== "CLOSED" ? S.detail.call : null;
-  return h("div", { class: "btns" }, STATUS_BTNS.map(([st, t]) => {
+  return h("div", { class: "btns" }, STATUS_BTNS.map(([st, t, only]) => {
     if (st === "DISPATCHED" && !can("unit.status.any")) return null;
-    const needsCall = ["DISPATCHED", "ENROUTE", "ONSCENE", "TRANSPORT"].includes(st);
+    if (only && !only.includes(discOf(u))) return null;
+    const needsCall = ["DISPATCHED", "ENROUTE", "ONSCENE", "TRANSPORT", "AT_HOSPITAL"].includes(st);
     let callId = null;
     let title = label(st);
     if (needsCall) {
@@ -463,14 +485,25 @@ function openModal(content) {
 function closeModal() { const m = $("#modal"); if (m) m.remove(); }
 
 // ---------------------------------------------------------------- new call
-function callTypeOptions() {
-  return S.ref.call_types.filter((t) => t.active).map((t) => [t.code, `${t.code} — ${t.description}`]);
+function callTypeGroups(includeInactive = false) {
+  return ["POLICE", "FIRE", "EMS"].map((d) => [DISC_LABEL[d],
+    S.ref.call_types.filter((t) => (includeInactive || t.active) && discOf(t) === d).map((t) => [t.code, `${t.code} — ${t.description}`])]);
+}
+const typeDisc = (code) => discOf(S.ref.call_types.find((t) => t.code === code));
+function emsFields(c, show) {
+  const box = h("div", { class: "grid full ems-fields" },
+    field("Patients", "patient_count", c.patient_count ?? "", { type: "number", inputmode: "numeric" }),
+    field("Chief complaint", "chief_complaint", c.chief_complaint, { max: 200, cls: "wide" }),
+    field("Destination hospital", "destination", c.destination, { max: 100 }));
+  box.hidden = !show;
+  return box;
 }
 function newCallModal() {
   if (!can("call.create")) return;
   const lastCity = store("cad-city") || "";
-  const avail = S.board.units.filter((u) => u.status === "AVAILABLE");
+  const avail = S.board.units.filter((u) => u.status === "AVAILABLE" || u.status === "IN_QUARTERS");
   const err = h("div", { class: "error" });
+  const emsBox = emsFields({}, false);
   const backEntry = h("details", {}, h("summary", { class: "muted" }, "Back-enter a call from a paper log (set original received time)"),
     h("div", { class: "grid", style: "margin-top:6px" }, field("Received at (local time)", "received_at", "", { type: "datetime-local", cls: "wide" })));
   const f = h("form", {
@@ -478,6 +511,7 @@ function newCallModal() {
       e.preventDefault();
       const d = formData(f);
       d.assign_units = avail.filter((u) => d["u_" + u.id]).map((u) => u.id);
+      if (emsBox.hidden) { delete d.patient_count; delete d.chief_complaint; delete d.destination; }
       for (const u of avail) delete d["u_" + u.id];
       if (!d.priority) delete d.priority;
       try {
@@ -490,7 +524,7 @@ function newCallModal() {
   },
     h("h2", {}, "New Call for Service"),
     h("div", { class: "grid" },
-      field("Call type *", "call_type", "", { options: callTypeOptions(), required: true, cls: "wide" }),
+      field("Call type *", "call_type", "", { groups: callTypeGroups(), required: true, cls: "wide" }),
       field("Priority (blank = default)", "priority", "", { options: S.ref.priorities.map((p) => [p, `P${p}`]) }),
       field("Source", "source", S.me.user.role === "officer" ? "OFFICER" : "PHONE", { options: S.ref.sources, blank: false }),
       field("Address / location", "location_address", "", { max: 200, cls: "wide" }),
@@ -501,9 +535,15 @@ function newCallModal() {
       field("Caller name", "caller_name", "", { max: 150 }),
       field("Caller phone", "caller_phone", "", { max: 40, type: "tel" }),
       field("Caller address", "caller_address", "", { max: 200, cls: "wide" }),
+      emsBox,
       field("Initial narrative", "narrative", "", { textarea: true, rows: 4, max: 8000, cls: "full" })),
     avail.length && can("unit.status.any") ? h("div", {}, h("h3", {}, "Dispatch available units now"),
-      h("div", { class: "row" }, avail.map((u) => h("label", { class: "check" }, h("input", { type: "checkbox", name: "u_" + u.id }), u.unit_code)))) : null,
+      ["POLICE", "FIRE", "EMS"].map((d) => {
+        const list = avail.filter((u) => discOf(u) === d);
+        return list.length ? h("div", { class: "row" }, h("span", { class: "muted", style: "min-width:52px" }, DISC_LABEL[d]),
+          list.map((u) => h("label", { class: "check" }, h("input", { type: "checkbox", name: "u_" + u.id }), u.unit_code))) : null;
+      }),
+      S.ref.active911 && S.ref.active911.enabled ? h("div", { class: "muted" }, `Dispatching ${S.ref.active911.disciplines.map((d) => DISC_LABEL[d]).join("/")} units also pages them through Active911.`) : null) : null,
     h("div", { style: "margin-top:10px" }, backEntry),
     h("div", { class: "row", style: "margin-top:12px" }, h("button", { class: "primary" }, "Create call"),
       h("button", { type: "button", onclick: closeModal }, "Cancel"), err));
@@ -511,6 +551,7 @@ function newCallModal() {
   f.call_type.addEventListener("change", () => {
     const t = S.ref.call_types.find((x) => x.code === f.call_type.value);
     if (t && !f.priority.value) f.priority.querySelector("option").textContent = `Default (P${t.default_priority})`;
+    emsBox.hidden = typeDisc(f.call_type.value) !== "EMS";
   });
   openModal(f);
 }
@@ -553,6 +594,7 @@ function renderDrawer() {
     h("span", { class: "num" }, c.call_number),
     h("span", { class: `badge b-${c.status}` }, c.status),
     h("span", { class: `prio prio-${c.priority}` }, `P${c.priority}`),
+    discTag(c),
     h("strong", {}, c.call_type),
     c.case_number ? h("span", {}, "Case ", h("strong", { class: "mono" }, c.case_number)) :
       can("narrative") ? h("button", { class: "small", onclick: () => act(() => api("POST", `/api/calls/${c.id}/case-number`), "Case number assigned") }, "Get case #") : null,
@@ -574,7 +616,8 @@ function renderDrawer() {
   },
     h("fieldset", { disabled: !editable, style: "border:0;padding:0;margin:0" },
       h("div", { class: "grid" },
-        field("Call type", "call_type", c.call_type, { options: callTypeOptions(), blank: false, cls: "wide" }),
+        field("Call type", "call_type", c.call_type, { groups: callTypeGroups(true), blank: false, cls: "wide" }),
+        field("Discipline", "discipline", discOf(c), { options: [["POLICE", "Police"], ["FIRE", "Fire"], ["EMS", "EMS"]], blank: false }),
         field("Priority", "priority", c.priority, { options: S.ref.priorities.map((p) => [p, `P${p}`]), blank: false }),
         field("Source", "source", c.source, { options: S.ref.sources, blank: false }),
         field("Address / location", "location_address", c.location_address, { max: 200, cls: "wide" }),
@@ -586,6 +629,7 @@ function renderDrawer() {
         field("Caller phone", "caller_phone", c.caller_phone, { max: 40 }),
         field("Caller address", "caller_address", c.caller_address, { max: 200, cls: "wide" }),
         can("time.edit") ? field("Received at", "received_at", c.received_at, { type: "datetime-local" }) : null,
+        emsFields(c, discOf(c) === "EMS" || c.patient_count != null || !!c.chief_complaint),
         field("Summary", "summary", c.summary, { textarea: true, rows: 2, max: 4000, cls: "full" })),
       editable ? h("div", { class: "row no-print", style: "margin-top:8px" }, h("button", { class: "primary" }, "Save changes"), err) : null));
 
@@ -599,13 +643,13 @@ function renderDrawer() {
     assignable.map((u) => h("option", { value: u.id }, `${u.unit_code} — ${label(u.status)}${u.current_call_number ? " on " + u.current_call_number : ""}`)));
   const timeCell = (cu, k) => h("td", { class: "mono" }, fmt(cu[k], false));
   const unitsTbl = h("table", {},
-    h("thead", {}, h("tr", {}, ["Unit", "Officer", "Disp", "Enr", "OnS", "Trn", "Clr", ""].map((t) => h("th", {}, t)))),
+    h("thead", {}, h("tr", {}, ["Unit", "Crew", "Disp", "Enr", "OnS", "Trn", "Hosp", "Clr", ""].map((t) => h("th", {}, t)))),
     h("tbody", {}, d.units.length ? d.units.map((cu) => h("tr", {},
       h("td", {}, h("strong", {}, cu.unit_code), cu.is_primary ? h("span", { class: "muted" }, " (pri)") : null),
       h("td", {}, cu.officer_name || ""),
-      timeCell(cu, "dispatched_at"), timeCell(cu, "enroute_at"), timeCell(cu, "onscene_at"), timeCell(cu, "transport_at"), timeCell(cu, "cleared_at"),
+      timeCell(cu, "dispatched_at"), timeCell(cu, "enroute_at"), timeCell(cu, "onscene_at"), timeCell(cu, "transport_at"), timeCell(cu, "at_hospital_at"), timeCell(cu, "cleared_at"),
       h("td", { class: "no-print" }, can("time.edit") ? h("button", { class: "small", onclick: () => unitTimesModal(cu) }, "times") : null))) :
-      h("tr", {}, h("td", { colspan: 8, class: "muted" }, "No units assigned."))));
+      h("tr", {}, h("td", { colspan: 9, class: "muted" }, "No units assigned."))));
   const unitsBlock = h("div", {}, unitsTbl,
     can("unit.status.any") && !closed ? h("div", { class: "row no-print", style: "margin-top:6px" }, unitSel,
       h("button", { onclick: () => unitSel.value && act(() => api("POST", `/api/units/${unitSel.value}/status`, { status: "DISPATCHED", call_id: c.id }), "Unit dispatched") }, "Dispatch"),
@@ -663,6 +707,20 @@ function renderDrawer() {
     }, "Reopen call"));
   }
 
+  const a911 = S.ref.active911 || { enabled: false, disciplines: [] };
+  const alerts = d.alerts || [];
+  const alertBlock = a911.enabled || alerts.length ? h("div", {},
+    h("h3", {}, "Active911 alerts"),
+    alerts.length ? h("table", {}, h("tbody", {}, alerts.map((a) => h("tr", {},
+      h("td", { class: "mono" }, fmt(a.sent_at || a.created_at, false)), h("td", {}, DISC_LABEL[a.discipline] || a.discipline),
+      h("td", {}, a.kind === "MANUAL" ? "manual" : "automatic"),
+      h("td", { class: a.status === "SENT" ? "" : "error" }, a.status === "SENT" ? "sent" : a.status === "FAILED" ? "FAILED" : (a.attempts ? "retrying" : "sending…")),
+      h("td", { class: "muted" }, a.note || a.last_error || ""))))) : h("div", { class: "muted" }, "No alerts sent for this call."),
+    a911.enabled && can("alert.send") && !closed ? h("div", { class: "row no-print", style: "margin-top:6px" },
+      a911.disciplines.map((disc) => h("button", { class: "small", onclick: () =>
+        ask(`Send a ${DISC_LABEL[disc]} page through Active911 for ${c.call_number}?`, { input: { label: "Extra information (optional, e.g. 'Second alarm')", optional: true }, okLabel: "Send page" })
+          .then((v) => v !== null && act(() => api("POST", `/api/calls/${c.id}/alert`, { discipline: disc, note: v || undefined }), "Page queued")) },
+      `Page ${DISC_LABEL[disc]}`))) : null) : null;
   const prior = d.prior_at_address.length ? h("div", {}, h("h3", {}, `Prior calls at this address (${d.prior_at_address.length})`),
     h("table", {}, h("tbody", {}, d.prior_at_address.map((p) => h("tr", { class: "click", onclick: () => openCall(p.id) },
       h("td", { class: "mono" }, p.call_number), h("td", { class: "mono" }, fmtShort(p.received_at)), h("td", {}, p.call_type), h("td", {}, p.disposition || "open")))))) : null;
@@ -673,6 +731,7 @@ function renderDrawer() {
     h("h3", {}, "Narrative / chronology"), narrBlock,
     h("h3", {}, "Units"), unitsBlock,
     h("h3", {}, "Call details"), df,
+    alertBlock,
     h("h3", {}, "Persons"), personsBlock,
     h("h3", {}, "Vehicles"), vehiclesBlock,
     prior, closeBlock);
@@ -769,8 +828,9 @@ function searchView() {
     h("div", { class: "grid" },
       field("Any text (call #, case #, address, narrative…)", "q", "", { cls: "wide" }),
       field("Address / place", "address", ""), field("Person name", "name", ""), field("Plate", "plate", ""), field("Unit", "unit", ""),
-      field("Call type", "call_type", "", { options: S.ref.call_types.map((t) => [t.code, `${t.code} — ${t.description}`]) }),
+      field("Call type", "call_type", "", { groups: callTypeGroups(true) }),
       field("Status", "status", "", { options: ["PENDING", "ACTIVE", "CLOSED"] }),
+      field("Discipline", "discipline", "", { options: [["POLICE", "Police"], ["FIRE", "Fire"], ["EMS", "EMS"]] }),
       field("Received from", "from", "", { type: "datetime-local" }), field("Received to", "to", "", { type: "datetime-local" })),
     h("div", { class: "row", style: "margin-top:8px" }, h("button", { class: "primary" }, "Search"), h("button", { type: "reset" }, "Clear")));
   return h("div", { class: "view" }, h("h2", {}, "Search calls"), f, results);
@@ -840,11 +900,12 @@ async function adminUnits() {
     },
   }, h("h3", {}, "Add unit"), h("div", { class: "grid" },
     field("Unit code * (e.g. 1A21, CAR3)", "unit_code", "", { required: true, max: 15 }), field("Description", "description", "", { max: 100 }),
-    field("Type", "unit_type", "PATROL", { options: S.ref.unit_types, blank: false })),
+    field("Type", "unit_type", "PATROL", { groups: ["POLICE", "FIRE", "EMS"].map((d) => [DISC_LABEL[d],
+      S.ref.unit_types.filter((t) => (S.ref.unit_type_discipline || {})[t] === d)]), blank: false })),
     h("div", { class: "row", style: "margin-top:8px" }, h("button", { class: "primary" }, "Add unit"), err));
-  const tbl = h("table", {}, h("thead", {}, h("tr", {}, ["Code", "Description", "Type", "Status", "Active", ""].map((t) => h("th", {}, t)))),
+  const tbl = h("table", {}, h("thead", {}, h("tr", {}, ["Code", "Description", "Type", "Discipline", "Status", "Active", ""].map((t) => h("th", {}, t)))),
     h("tbody", {}, units.map((u) => h("tr", {},
-      h("td", { class: "mono" }, u.unit_code), h("td", {}, u.description || ""), h("td", {}, u.unit_type), h("td", {}, label(u.status)),
+      h("td", { class: "mono" }, u.unit_code), h("td", {}, u.description || ""), h("td", {}, label(u.unit_type)), h("td", {}, discTag(u)), h("td", {}, label(u.status)),
       h("td", {}, u.active ? "yes" : "no"),
       h("td", {}, h("button", { class: "small", onclick: () => act(() => api("PUT", `/api/admin/units/${u.id}`, { active: !u.active }), "Updated").then(rerenderAdmin) }, u.active ? "deactivate" : "activate"),
         " ", h("button", { class: "small", onclick: () => unitHistoryModal(u) }, "history"))))));
@@ -865,10 +926,11 @@ async function adminRef(path, withPrio) {
   const f = h("form", { onsubmit: (e) => { e.preventDefault(); save(formData(f)); } },
     h("h3", {}, "Add / update (same code overwrites)"),
     h("div", { class: "grid" }, field("Code *", "code", "", { required: true, max: 20 }), field("Description *", "description", "", { required: true, max: 100, cls: "wide" }),
-      withPrio ? field("Default priority", "default_priority", 3, { options: S.ref.priorities, blank: false }) : null),
+      withPrio ? field("Default priority", "default_priority", 3, { options: S.ref.priorities, blank: false }) : null,
+      withPrio ? field("Discipline", "discipline", "POLICE", { options: [["POLICE", "Police"], ["FIRE", "Fire"], ["EMS", "EMS"]], blank: false }) : null),
     h("div", { class: "row", style: "margin-top:8px" }, h("button", { class: "primary" }, "Save"), err));
-  const tbl = h("table", {}, h("thead", {}, h("tr", {}, ["Code", "Description", withPrio ? "Default P" : null, "Active", ""].filter(Boolean).map((t) => h("th", {}, t)))),
-    h("tbody", {}, items.map((x) => h("tr", {}, h("td", { class: "mono" }, x.code), h("td", {}, x.description), withPrio ? h("td", {}, x.default_priority) : null,
+  const tbl = h("table", {}, h("thead", {}, h("tr", {}, ["Code", "Description", withPrio ? "Default P" : null, withPrio ? "Discipline" : null, "Active", ""].filter(Boolean).map((t) => h("th", {}, t)))),
+    h("tbody", {}, items.map((x) => h("tr", {}, h("td", { class: "mono" }, x.code), h("td", {}, x.description), withPrio ? h("td", {}, x.default_priority) : null, withPrio ? h("td", {}, discTag(x)) : null,
       h("td", {}, x.active ? "yes" : "no"),
       h("td", {}, h("button", { class: "small", onclick: () => save({ ...x, active: !x.active }) }, x.active ? "deactivate" : "activate"))))));
   return h("div", {}, tbl, f);
@@ -928,6 +990,18 @@ function exportView() {
       h("div", {}, `${st.calls_total} calls total · ${st.calls_not_yet_archived} waiting to be copied · ${st.written_total} files written since server start`),
       h("button", { class: "small", style: "margin-top:6px", onclick: () => act(() => api("POST", "/api/archive/run"), "Archive copy started").then(() => setTimeout(() => setView("export"), 1500)) }, "Copy now"));
   }).catch((e) => arch.replaceChildren(h("span", { class: "error" }, e.message)));
+  const pager = h("div", { class: "sub" }, h("span", { class: "muted" }, "Loading Active911 status…"));
+  api("GET", "/api/alerts/status").then((st) => {
+    if (!st.enabled) {
+      pager.replaceChildren(h("strong", {}, "Active911 paging: off."),
+        h("div", { class: "muted" }, st.config_problem ? `Configuration problem: ${st.config_problem}` : "Set up in config.ini [active911] (IT)."));
+      return;
+    }
+    pager.replaceChildren(h("div", {}, h("strong", {}, "Active911 paging: on "), `for ${st.disciplines.map((d) => DISC_LABEL[d]).join(", ")}.`),
+      h("div", {}, `${st.sent} sent · ${st.pending} waiting · `, h("span", { class: st.failed ? "error" : "" }, `${st.failed} failed`),
+        st.last_sent ? ` · last sent ${fmt(st.last_sent)}` : ""),
+      st.last_error ? h("div", { class: "error" }, `Last problem: ${st.last_error}`) : null);
+  }).catch((e) => pager.replaceChildren(h("span", { class: "error" }, e.message)));
   const today = new Date();
   const dayInput = h("input", { type: "date", id: "daily-date", value: `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}` });
   const daily = h("div", { class: "sub" },
@@ -939,7 +1013,7 @@ function exportView() {
         toast("Downloading the daily call log…");
       } }, "Download PDF")),
     h("div", { class: "muted" }, "Lists every call received that day with units, on-scene and closed times, and dispositions."));
-  return h("div", { class: "view" }, h("h2", {}, "Export data"), arch, daily,
+  return h("div", { class: "view" }, h("h2", {}, "Export data"), arch, pager, daily,
     h("p", {}, "Downloads every call, narrative entry, unit time, person, vehicle, unit status change, and the audit log as JSON and CSV — " +
       "for import into Valcour when it returns or into a replacement system. Leave the dates blank to export everything."),
     h("p", { class: "muted" }, "The export contains criminal justice information. Store it only on agency-controlled, encrypted media. The export itself is recorded in the audit log."),

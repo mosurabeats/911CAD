@@ -24,7 +24,7 @@ from .util import now_iso, rows_to_list, row_to_dict
 
 log = logging.getLogger("cad.archive")
 
-DAILY_COLS = ["call_number", "case_number", "status", "received_local", "call_type", "priority", "source",
+DAILY_COLS = ["call_number", "case_number", "status", "received_local", "call_type", "priority", "discipline", "source",
               "location_address", "location_city", "location_common", "caller_name", "caller_phone",
               "units", "first_dispatched_local", "first_onscene_local", "closed_local", "disposition"]
 
@@ -71,7 +71,8 @@ def render_text(rec, agency):
     w(f"Call number : {rec['call_number']}")
     w(f"Case number : {rec['case_number'] or '-'}")
     w(f"Status      : {rec['status']}" + (f"   Disposition: {rec['disposition']}" if rec["disposition"] else ""))
-    w(f"Call type   : {rec['call_type']}   Priority: P{rec['priority']}   Source: {rec['source']}")
+    w(f"Call type   : {rec['call_type']}   Priority: P{rec['priority']}   Source: {rec['source']}"
+      f"   Discipline: {rec.get('discipline') or 'POLICE'}")
     w(f"Received    : {local(rec['received_at'])}")
     if rec["closed_at"]:
         w(f"Closed      : {local(rec['closed_at'])}")
@@ -86,15 +87,24 @@ def render_text(rec, agency):
     w(f"  Name      : {rec['caller_name'] or ''}")
     w(f"  Phone     : {rec['caller_phone'] or ''}")
     w(f"  Address   : {rec['caller_address'] or ''}")
+    if rec.get("patient_count") or rec.get("chief_complaint") or rec.get("destination"):
+        w("")
+        w("PATIENT / EMS")
+        if rec.get("patient_count") is not None:
+            w(f"  Patients  : {rec['patient_count']}")
+        if rec.get("chief_complaint"):
+            w(f"  Complaint : {rec['chief_complaint']}")
+        if rec.get("destination"):
+            w(f"  Destination: {rec['destination']}")
     if rec["summary"]:
         w("")
         w("SUMMARY")
         w("  " + rec["summary"].replace("\n", "\n  "))
     w("")
-    w("UNITS        Dispatched  En route    On scene    Transport   Cleared     Officer")
+    w("UNITS        Dispatched  En route    On scene    Transport   At hosp     Cleared     Officer")
     for u in rec["units"]:
-        t = [local(u[k], "%H:%M:%S") or "--" for k in ("dispatched_at", "enroute_at", "onscene_at", "transport_at",
-                                                        "cleared_at")]
+        t = [local(u.get(k), "%H:%M:%S") or "--" for k in ("dispatched_at", "enroute_at", "onscene_at", "transport_at",
+                                                            "at_hospital_at", "cleared_at")]
         w(f"  {u['unit_code']:<10} " + "  ".join(f"{x:<10}" for x in t) + f"  {u['officer_name'] or ''}")
     if not rec["units"]:
         w("  (none)")
@@ -151,13 +161,13 @@ def daily_pdf(app, day, rows):
     """One-page-per-~40-calls daily call log, landscape."""
     agency = app.config.get("agency", "name")
     date_label = datetime.strptime(day, "%Y-%m-%d").strftime("%A, %B %d, %Y")
-    head = f"{'CALL #':<12} {'RECEIVED':<8} {'TYPE':<9} {'P':<1} {'LOCATION':<34} {'UNITS':<12} {'ON SCENE':<8} {'CLOSED':<8} {'DISP / STATUS':<11} {'CASE #':<12}"
+    head = f"{'CALL #':<12} {'RECEIVED':<8} {'TYPE':<9} {'P':<1} {'DISC':<4} {'LOCATION':<30} {'UNITS':<12} {'ON SCENE':<8} {'CLOSED':<8} {'DISP / STATUS':<11} {'CASE #':<12}"
     lines = [f"{len(rows)} call(s) received.  Times are local.", "", head, "-" * len(head)]
     for k in rows:
         loc = ", ".join(x for x in (k["location_address"] or k["location_common"], k["location_city"]) if x)
         lines.append(
             f"{k['call_number']:<12} {local(k['received_at'], '%H:%M:%S'):<8} {k['call_type'][:9]:<9} {k['priority']:<1} "
-            f"{loc[:34]:<34} {(k['units'] or '-')[:12]:<12} {local(k['first_ons'], '%H:%M:%S') or '-':<8} "
+            f"{(k['discipline'] or 'POLICE')[:4]:<4} {loc[:30]:<30} {(k['units'] or '-')[:12]:<12} {local(k['first_ons'], '%H:%M:%S') or '-':<8} "
             f"{local(k['closed_at'], '%H:%M:%S') or '-':<8} {(k['disposition'] or k['status'])[:11]:<11} {k['case_number'] or '':<12}")
     if not rows:
         lines.append("(no calls)")
@@ -246,7 +256,7 @@ class Archiver:
         wr.writerow(DAILY_COLS)
         for k in rows:
             wr.writerow([k["call_number"], k["case_number"] or "", k["status"], local(k["received_at"]), k["call_type"],
-                         k["priority"], k["source"], k["location_address"] or "", k["location_city"] or "",
+                         k["priority"], k["discipline"] or "POLICE", k["source"], k["location_address"] or "", k["location_city"] or "",
                          k["location_common"] or "", k["caller_name"] or "", k["caller_phone"] or "", k["units"] or "",
                          local(k["first_disp"]), local(k["first_ons"]), local(k["closed_at"]), k["disposition"] or ""])
         atomic_write(os.path.join(self.dir, "Daily", f"{day}.csv"), out.getvalue())

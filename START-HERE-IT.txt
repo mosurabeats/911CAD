@@ -4,8 +4,9 @@
 
 WHAT THIS IS
 ------------
-A temporary computer-aided dispatch (CAD) and call-logging system for the
-police department while the state system (Valcour) is offline. It records
+A temporary computer-aided dispatch (CAD) and call-logging system for
+Police, Fire and EMS dispatch while the state system (Valcour) is offline.
+It can page Fire/EMS crews through Active911. It records
 calls, unit status and times, narratives, persons and vehicles, and keeps
 everything so it can be exported back into Valcour or a replacement later.
 
@@ -58,6 +59,12 @@ WHAT YOU NEED BEFORE STARTING
     the computer account on the network.
 [ ] From the department: the name of the first administrator, and the LAST
     call number Valcour issued this year (so new numbers don't collide).
+[ ] For Active911 paging (optional, see docs\ACTIVE911.md):
+    - the Active911 alert email address for the fire department and for
+      the ambulance service (Active911 > Agency tab > Alert Email)
+    - an outgoing mail server the CAD may send through (host, port,
+      starttls/ssl, a sending account) and an OUTBOUND firewall rule from
+      the CAD server to that mail server only
 
 
 INSTALLATION
@@ -102,6 +109,11 @@ INSTALLATION
      py manage.py set-next-number call NNNN     (NNNN = Valcour's last + 1)
      py manage.py create-admin <username>       (the department's admin)
 
+   Active911 (if used): fill in the [active911] section of config.ini
+   (docs\ACTIVE911.md), put the mail password in data\smtp-password.txt,
+   e-mail support@active911.com that this CAD sends the "Cadpage" format,
+   then after step 6:  py manage.py test-alert fire  /  test-alert ems
+
 6. Verify, then start:
      py manage.py check                          (fix anything marked FAIL)
      Start-ScheduledTask -TaskName InterimCAD
@@ -145,6 +157,8 @@ GO-LIVE CHECKS (do all, keep a copy)
 [ ] A test call appears in the I: drive archive within a minute
     (.pdf, .txt, .json), and Daily\<date>.pdf / .csv are there too.
 [ ] A non-PD town user cannot open the archive or audit-mirror folders.
+[ ] Active911: "test-alert fire" and "test-alert ems" arrive on crews' phones;
+    a test Fire call dispatched to an engine pages within ~10 seconds.
 [ ] RESTORE TEST: copy a file from C:\InterimCAD\data\backups to a spare PC
     and start the CAD from it.
 
@@ -174,6 +188,7 @@ Self-test           py -m unittest discover -s tests   (from this folder; all sh
 MORE DETAIL
 -----------
 docs\INSTALL_WINDOWS.md   step-by-step with explanations
+docs\ACTIVE911.md         Active911 paging setup
 docs\SECURITY_CJIS.md     CJIS control checklist and known limitations
 docs\DATA_MIGRATION.md    getting the data back into Valcour
 docs\SINGLE_PC.md         one-computer mode (no server)

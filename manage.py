@@ -9,6 +9,7 @@
   python manage.py export [--from D] [--to D] [-o FILE.zip]   Full data export (JSON + CSV)
   python manage.py set-next-number call|case N [--year YYYY]   Set the next number issued
   python manage.py check                       Verify the whole configuration (run after install)
+  python manage.py test-alert fire|ems          Send a TEST page to Active911
   python manage.py verify-audit                Check the audit log hash chain for tampering
   python manage.py make-cert                   Print the command to create a self-signed TLS cert
 
@@ -186,6 +187,15 @@ def run_checks(cfg, app):
                      (app.agency_id, year)).fetchone() or [0])[0] + 1
     res("PASS", "Next call number", format_number(cfg, "call", year, nxt)
         + ("" if nxt > 1 else "  (starts at 1 - use set-next-number to continue after Valcour's last number)"))
+    al = app.alerter
+    if cfg.getbool("active911", "enabled"):
+        if al.enabled:
+            res("PASS", "Active911 alerts", "on for " + ", ".join(al.disciplines())
+                + f" via {al.smtp_host}:{al.smtp_port} ({al.security}) - send one with: manage.py test-alert fire")
+        else:
+            res("FAIL", "Active911 alerts", al.config_problem or "misconfigured")
+    else:
+        res("WARN", "Active911 alerts", "off ([active911] enabled = false)")
     ok, n, bad = app.db.verify_audit()
     res("PASS" if ok else "FAIL", "Audit log integrity", f"{n} entries verified" if ok else f"chain broken at entry {bad}")
     fails, warns = results.count("FAIL"), results.count("WARN")
@@ -218,6 +228,8 @@ def main():
     p.add_argument("next", type=int)
     p.add_argument("--year", type=int, default=datetime.now().year)
     sub.add_parser("verify-audit")
+    p = sub.add_parser("test-alert", help="send a TEST alert to the Active911 address for a discipline")
+    p.add_argument("discipline", choices=["fire", "ems", "police"])
     sub.add_parser("check", help="verify configuration, certificate, folders, accounts and audit log")
     sub.add_parser("make-cert")
     args = ap.parse_args()
@@ -303,6 +315,23 @@ def main():
             db.audit(c, None, "cli", "COUNTER_SET", "counter", f"{args.kind}-{args.year}",
                      {"next": args.next, "previous_value": cur[0] if cur else 0})
         print(f"Next {args.kind} number for {args.year}: {format_number(cfg, args.kind, args.year, args.next)}")
+    elif args.cmd == "test-alert":
+        al = app.alerter
+        disc = args.discipline.upper()
+        if not al.enabled:
+            print("Active911 alerts are not enabled or not configured: " + (al.config_problem or "enabled = false"))
+            return 1
+        if disc not in al.disciplines():
+            print(f"No {args.discipline}_address is set in [active911].")
+            return 1
+        try:
+            body = al.send_test(disc)
+        except Exception as e:  # noqa: BLE001
+            print(f"FAILED to send: {type(e).__name__}: {e}")
+            print("Check smtp_host/port/security/username/password and that this server may reach the mail server.")
+            return 1
+        print(f"Test alert sent to {', '.join(al.addresses[disc])}:\n\n{body}\n")
+        print("It should appear in the Active911 app within a minute.")
     elif args.cmd == "check":
         return run_checks(cfg, app)
     elif args.cmd == "verify-audit":

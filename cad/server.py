@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import api, auth, seed
+from .alerts import Alerter
 from .archive import Archiver, AuditMirror
 from .config import Config
 from .db import Database
@@ -47,6 +48,7 @@ class App:
             self.allowed_networks = [ipaddress.ip_network(n, strict=False) for n in nets]
         except ValueError as e:
             raise SystemExit(f"Invalid allowed_networks in config.ini: {e}")
+        self.alerter = Alerter(self)
         self.audit_mirror = AuditMirror(self, config.path_of("audit", "mirror_dir"))
         self.archiver = Archiver(self, config.path_of("archive", "dir"), config.getint("archive", "interval_seconds"))
 
@@ -56,16 +58,36 @@ class App:
         if r:
             c.execute("UPDATE agencies SET name=?, ori=? WHERE id=?",
                       (self.config.get("agency", "name"), self.config.get("agency", "ori"), r[0]))
+            self._seed_fire_ems(r[0])
             return r[0]
         with self.db.tx() as c:
             aid = c.execute("INSERT INTO agencies(ori, name, created_at) VALUES (?,?,?)",
                             (self.config.get("agency", "ori"), self.config.get("agency", "name"), now_iso())).lastrowid
-            c.executemany("INSERT INTO call_types(agency_id, code, description, default_priority) VALUES (?,?,?,?)",
-                          [(aid, *t) for t in seed.CALL_TYPES])
+            c.executemany("INSERT INTO call_types(agency_id, code, description, default_priority, discipline)"
+                          " VALUES (?,?,?,?,?)", [(aid, *t) for t in seed.CALL_TYPES])
             c.executemany("INSERT INTO dispositions(agency_id, code, description) VALUES (?,?,?)",
                           [(aid, *d) for d in seed.DISPOSITIONS])
             self.db.audit(c, None, None, "SYSTEM_INIT", "agency", aid)
+            c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('seed_fire_ems', '1')")
         return aid
+
+    def _seed_fire_ems(self, aid):
+        """One-time upgrade for databases created before Fire/EMS support: add the Fire/EMS call types and
+        dispositions (never overwriting codes an admin already has) and tag the existing fire/medical codes."""
+        c = self.db.conn()
+        if c.execute("SELECT 1 FROM meta WHERE key='seed_fire_ems'").fetchone():
+            return
+        with self.db.tx() as c:
+            c.executemany("INSERT OR IGNORE INTO call_types(agency_id, code, description, default_priority, discipline)"
+                          " VALUES (?,?,?,?,?)", [(aid, *t) for t in seed.CALL_TYPES])
+            for code, _d, _p, disc in seed.CALL_TYPES:
+                if disc != "POLICE":
+                    c.execute("UPDATE call_types SET discipline=? WHERE agency_id=? AND code=? AND discipline='POLICE'",
+                              (disc, aid, code))
+            c.executemany("INSERT OR IGNORE INTO dispositions(agency_id, code, description) VALUES (?,?,?)",
+                          [(aid, *d) for d in seed.DISPOSITIONS])
+            c.execute("INSERT INTO meta(key, value) VALUES ('seed_fire_ems', '1')")
+            self.db.audit(c, None, None, "SYSTEM_UPGRADE", "agency", aid, {"added": "fire/ems reference data"})
 
     def ip_allowed(self, ip):
         if not self.allowed_networks:
@@ -344,6 +366,9 @@ def serve(config_path, open_browser=False):
     start_backup_thread(app)
     app.archiver.start()
     app.audit_mirror.start()
+    app.alerter.start()
+    if app.alerter.enabled:
+        log.info("Active911 alerts on for: %s", ", ".join(app.alerter.disciplines()))
     if not app.allowed_networks and not is_local_only(config):
         log.warning("allowed_networks is empty: any address that can reach this port may try to sign in.")
     if not config.getbool("security", "require_mfa"):

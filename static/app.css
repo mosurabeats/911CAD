@@ -1,12 +1,14 @@
 :root {
   --bg: #0f141a; --panel: #171e27; --panel2: #1e2732; --line: #2c3846; --text: #e6edf3; --muted: #93a1b0;
   --accent: #4ea1ff; --danger: #ff5d5d; --warn: #ffb020; --ok: #3ccf7a; --info: #7aa7ff; --violet: #b48cff;
+  --pol: #6fb7ff; --fire: #ff7a45; --ems: #2fd1c2;
   --input: #0c1116; --p1: #ff4d4d; --p2: #ff9933; --p3: #e6c229; --p4: #6fb7ff; --p5: #8a97a6;
   color-scheme: dark;
 }
 :root[data-theme="light"] {
   --bg: #eef1f5; --panel: #ffffff; --panel2: #f4f6f9; --line: #d3dae3; --text: #17202a; --muted: #5b6875;
   --accent: #0b63ce; --danger: #c62828; --warn: #b26a00; --ok: #1b8a4b; --info: #2f5fc4; --violet: #6b3fc4;
+  --pol: #1f5fbf; --fire: #c2410c; --ems: #0f7c73;
   --input: #ffffff; --p1: #d32f2f; --p2: #e06c00; --p3: #a68a00; --p4: #1f73c9; --p5: #6b7785;
   color-scheme: light;
 }
@@ -98,6 +100,12 @@ tr.st-CLOSED td { color: var(--muted); }
 .us-TRANSPORT { border-left-color: var(--violet); } .us-BUSY { border-left-color: var(--p3); }
 .us-OUT_OF_SERVICE { border-left-color: var(--p5); } .us-OFF_DUTY { border-left-color: var(--line); opacity: .7; }
 .st { font-size: 11px; font-weight: 700; }
+.disc { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .04em; padding: 0 4px; border-radius: 3px; border: 1px solid currentColor; vertical-align: 1px; }
+.d-POLICE { color: var(--pol); } .d-FIRE { color: var(--fire); } .d-EMS { color: var(--ems); }
+.us-AT_HOSPITAL { border-left-color: var(--ems); } .us-IN_QUARTERS { border-left-color: var(--ok); }
+.t-AT_HOSPITAL { color: var(--ems); } .t-IN_QUARTERS { color: var(--ok); }
+.discbar button { padding: 2px 8px; }
+.ems-fields[hidden] { display: none; }
 .t-AVAILABLE { color: var(--ok); } .t-DISPATCHED { color: var(--warn); } .t-ENROUTE { color: var(--info); }
 .t-ONSCENE { color: var(--danger); } .t-TRANSPORT { color: var(--violet); } .t-BUSY { color: var(--p3); }
 .t-OUT_OF_SERVICE, .t-OFF_DUTY { color: var(--muted); }

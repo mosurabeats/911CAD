@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS call_types (
     description      TEXT NOT NULL,
     default_priority INTEGER NOT NULL DEFAULT 3,
     active           INTEGER NOT NULL DEFAULT 1,
+    discipline       TEXT NOT NULL DEFAULT 'POLICE',
     UNIQUE (agency_id, code)
 );
 
@@ -87,6 +88,7 @@ CREATE TABLE IF NOT EXISTS units (
     officer_name    TEXT,
     location_note   TEXT,
     active          INTEGER NOT NULL DEFAULT 1,
+    discipline      TEXT NOT NULL DEFAULT 'POLICE',
     UNIQUE (agency_id, unit_code)
 );
 
@@ -117,7 +119,11 @@ CREATE TABLE IF NOT EXISTS calls (
     created_by       INTEGER NOT NULL REFERENCES users(id),
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL,
-    version          INTEGER NOT NULL DEFAULT 1
+    version          INTEGER NOT NULL DEFAULT 1,
+    discipline       TEXT NOT NULL DEFAULT 'POLICE',
+    patient_count    INTEGER,
+    chief_complaint  TEXT,
+    destination      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status);
 CREATE INDEX IF NOT EXISTS idx_calls_received ON calls(received_at);
@@ -146,7 +152,8 @@ CREATE TABLE IF NOT EXISTS call_units (
     enroute_at    TEXT,
     onscene_at    TEXT,
     transport_at  TEXT,
-    cleared_at    TEXT
+    cleared_at    TEXT,
+    at_hospital_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_cu_call ON call_units(call_id);
 
@@ -211,6 +218,27 @@ CREATE TABLE IF NOT EXISTS call_vehicles (
 );
 CREATE INDEX IF NOT EXISTS idx_veh_call ON call_vehicles(call_id);
 CREATE INDEX IF NOT EXISTS idx_veh_plate ON call_vehicles(plate);
+
+-- Outbox for Active911 (and similar) alert emails; sent by a background worker with retries.
+CREATE TABLE IF NOT EXISTS alerts (
+    id          INTEGER PRIMARY KEY,
+    call_id     INTEGER NOT NULL REFERENCES calls(id),
+    discipline  TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'AUTO',
+    to_address  TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','SENT','FAILED')),
+    created_at  TEXT NOT NULL,
+    created_by  INTEGER REFERENCES users(id),
+    next_try_at TEXT NOT NULL,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    sent_at     TEXT,
+    last_error  TEXT,
+    subject     TEXT,
+    body        TEXT,
+    note        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status, next_try_at);
+CREATE INDEX IF NOT EXISTS idx_alerts_call ON alerts(call_id);
 
 -- Tracks which version of each call has been copied to the archive folder.
 CREATE TABLE IF NOT EXISTS archive_state (
@@ -324,9 +352,20 @@ class Database:
     @staticmethod
     def _migrate(c):
         """Additive column migrations for databases created by earlier versions."""
-        cols = {r[1] for r in c.execute("PRAGMA table_info(users)")}
-        if "enabled_at" not in cols:
-            c.execute("ALTER TABLE users ADD COLUMN enabled_at TEXT")
+        def add(table, col, ddl):
+            if col not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+
+        add("users", "enabled_at", "TEXT")
+        # Fire / EMS support
+        add("call_types", "discipline", "TEXT NOT NULL DEFAULT 'POLICE'")
+        add("units", "discipline", "TEXT NOT NULL DEFAULT 'POLICE'")
+        add("calls", "discipline", "TEXT NOT NULL DEFAULT 'POLICE'")
+        add("calls", "patient_count", "INTEGER")
+        add("calls", "chief_complaint", "TEXT")
+        add("calls", "destination", "TEXT")
+        add("call_units", "at_hospital_at", "TEXT")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_calls_discipline ON calls(discipline)")
 
     def seq(self):
         return int(self.conn().execute("SELECT value FROM meta WHERE key='seq'").fetchone()[0])

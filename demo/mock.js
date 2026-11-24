@@ -14,7 +14,7 @@
   const ago = (min) => iso(new Date(Date.now() - min * 60000));
   const yy = String(new Date().getFullYear()).slice(2);
 
-  const BASE = ["view", "call.create", "call.edit", "call.close", "narrative", "unit.status.any", "unit.crew", "entity.edit", "time.edit"];
+  const BASE = ["view", "call.create", "call.edit", "call.close", "narrative", "unit.status.any", "unit.crew", "entity.edit", "time.edit", "alert.send"];
   const PERMS = {
     admin: [...BASE, "call.reopen", "unit.manage", "export", "audit", "admin"],
     supervisor: [...BASE, "call.reopen", "unit.manage", "export", "audit"],
@@ -31,24 +31,32 @@
       ["MISSING", "Missing Person", 2], ["MVA", "Motor Vehicle Crash", 2], ["MVAINJ", "Motor Vehicle Crash - Injury", 1],
       ["PARKING", "Parking Complaint", 5], ["SUSP", "Suspicious Person/Vehicle", 3], ["TRAFFIC", "Traffic Complaint / Hazard", 3],
       ["TS", "Traffic Stop", 3], ["WELFARE", "Welfare Check", 2], ["911HANG", "911 Hang-up / Open Line", 2], ["OTHER", "Other", 4],
-    ].map(([code, description, default_priority], i) => ({ id: i + 1, code, description, default_priority, active: 1 })),
+      ["STRUCT", "Structure Fire", 1, "FIRE"], ["FIREALARM", "Fire Alarm Activation", 2, "FIRE"], ["CO", "CO Alarm / Detector", 2, "FIRE"],
+      ["VEHFIRE", "Vehicle Fire", 2, "FIRE"], ["GAS", "Gas Leak / Odor", 2, "FIRE"], ["EXTRIC", "Extrication / Entrapment", 1, "FIRE"],
+      ["CARDIAC", "Cardiac / Chest Pain", 1, "EMS"], ["BREATH", "Breathing Problem", 1, "EMS"], ["FALL", "Fall", 2, "EMS"],
+      ["UNCON", "Unconscious / Unresponsive", 1, "EMS"], ["SICK", "Sick Person", 3, "EMS"], ["LIFTASSIST", "Lift Assist", 4, "EMS"],
+    ].map(([code, description, default_priority, discipline], i) => ({ id: i + 1, code, description, default_priority, active: 1, discipline: discipline || (code === "MVAINJ" ? "EMS" : "POLICE") })),
     dispositions: [
       ["REPORT", "Report Taken"], ["ARREST", "Arrest"], ["CITATION", "Citation Issued"], ["WARNING", "Warning Issued"],
       ["ADVISED", "Advised / Mediated"], ["ASSISTED", "Assisted"], ["GOA", "Gone on Arrival"], ["UTL", "Unable to Locate"],
-      ["UNFOUNDED", "Unfounded"], ["CANCELLED", "Cancelled"],
+      ["UNFOUNDED", "Unfounded"], ["CANCELLED", "Cancelled"], ["TRANSPORT", "Transported"], ["EXTINGUISHED", "Fire Extinguished"],
+      ["FALSEALARM", "False Alarm"], ["TREATED", "Treated, Not Transported"], ["REFUSAL", "Patient Refused Care / Transport"],
     ].map(([code, description], i) => ({ id: i + 1, code, description, active: 1 })),
     priorities: [1, 2, 3, 4, 5],
     sources: ["911", "PHONE", "RADIO", "WALK_IN", "OFFICER", "ALARM_CO", "OTHER_AGENCY", "OTHER"],
-    unit_statuses: ["AVAILABLE", "DISPATCHED", "ENROUTE", "ONSCENE", "TRANSPORT", "BUSY", "OUT_OF_SERVICE", "OFF_DUTY"],
-    call_statuses: ["DISPATCHED", "ENROUTE", "ONSCENE", "TRANSPORT"],
-    unit_types: ["PATROL", "SUPERVISOR", "DETECTIVE", "K9", "TRAFFIC", "ADMIN", "OTHER_AGENCY", "OTHER"],
-    person_roles: ["COMPLAINANT", "CALLER", "VICTIM", "SUSPECT", "WITNESS", "ARRESTEE", "DRIVER", "PASSENGER", "OWNER", "SUBJECT", "MISSING", "OTHER"],
+    unit_statuses: ["AVAILABLE", "IN_QUARTERS", "DISPATCHED", "ENROUTE", "ONSCENE", "TRANSPORT", "AT_HOSPITAL", "BUSY", "OUT_OF_SERVICE", "OFF_DUTY"],
+    call_statuses: ["DISPATCHED", "ENROUTE", "ONSCENE", "TRANSPORT", "AT_HOSPITAL"],
+    unit_types: ["PATROL", "SUPERVISOR", "DETECTIVE", "K9", "TRAFFIC", "ENGINE", "LADDER", "TANKER", "RESCUE", "FIRE_CHIEF", "AMBULANCE_ALS", "AMBULANCE_BLS", "EMS_SUPERVISOR", "OTHER"],
+    unit_type_discipline: { PATROL: "POLICE", SUPERVISOR: "POLICE", DETECTIVE: "POLICE", K9: "POLICE", TRAFFIC: "POLICE", ENGINE: "FIRE", LADDER: "FIRE", TANKER: "FIRE", RESCUE: "FIRE", FIRE_CHIEF: "FIRE", AMBULANCE_ALS: "EMS", AMBULANCE_BLS: "EMS", EMS_SUPERVISOR: "EMS", OTHER: "POLICE" },
+    disciplines: ["POLICE", "FIRE", "EMS"],
+    active911: { enabled: true, disciplines: ["FIRE", "EMS"] },
+    person_roles: ["COMPLAINANT", "CALLER", "VICTIM", "SUSPECT", "WITNESS", "ARRESTEE", "DRIVER", "PASSENGER", "OWNER", "SUBJECT", "MISSING", "PATIENT", "OTHER"],
     vehicle_roles: ["INVOLVED", "SUSPECT", "VICTIM", "TOWED", "STOLEN", "RECOVERED", "ABANDONED", "OTHER"],
     roles: ["admin", "supervisor", "dispatcher", "officer", "records"],
   };
 
   // ------------------------------------------------------------------ state
-  const db = { seq: 1, users: [], units: [], calls: [], narrative: [], callUnits: [], persons: [], vehicles: [], usl: [], audit: [], counters: { call: 0, case: 0 }, ids: {} };
+  const db = { seq: 1, users: [], units: [], calls: [], narrative: [], callUnits: [], persons: [], vehicles: [], usl: [], audit: [], alerts: [], counters: { call: 0, case: 0 }, ids: {} };
   const nextId = (t) => (db.ids[t] = (db.ids[t] || 0) + 1);
   let session = null;
 
@@ -64,13 +72,17 @@
 
   const mkUnit = (unit_code, unit_type, officer_name, status, officer_user_id = null) => db.units.push({
     id: nextId("units"), unit_code, description: null, unit_type, status, status_at: ago(40), current_call_id: null,
-    officer_user_id, officer_name, active: 1,
+    officer_user_id, officer_name, active: 1, discipline: REF.unit_type_discipline[unit_type] || "POLICE",
   });
   mkUnit("P1", "PATROL", "Ofc. Kim Hale #211", "AVAILABLE");
   mkUnit("P2", "PATROL", "Ofc. Pat Rowe #214", "AVAILABLE", 2);
   mkUnit("P3", "PATROL", "Ofc. Sam Ortiz #220", "AVAILABLE");
   mkUnit("P4", "PATROL", null, "OFF_DUTY");
   mkUnit("S1", "SUPERVISOR", "Sgt. Lee Marsh #105", "AVAILABLE", 3);
+  mkUnit("E1", "ENGINE", "Lt. R. Cole + 2", "IN_QUARTERS");
+  mkUnit("L1", "LADDER", "Capt. J. Hart + 1", "IN_QUARTERS");
+  mkUnit("A1", "AMBULANCE_ALS", "Medic D. Shaw / EMT T. Ray", "AVAILABLE");
+  mkUnit("A2", "AMBULANCE_BLS", "EMT K. Lund / EMT M. Ito", "IN_QUARTERS");
 
   const user = () => session;
   const sysUser = () => session || db.users[0];
@@ -95,8 +107,16 @@
   const clean = (v, upper) => (v === undefined || v === null || String(v).trim() === "" ? null : (upper ? String(v).trim().toUpperCase() : String(v).trim()));
 
   // ------------------------------------------------------------------ unit status (mirrors server rules)
-  const TIME = { DISPATCHED: "dispatched_at", ENROUTE: "enroute_at", ONSCENE: "onscene_at", TRANSPORT: "transport_at" };
-  const LABEL = { DISPATCHED: "dispatched", ENROUTE: "en route", ONSCENE: "on scene", TRANSPORT: "transporting" };
+  const TIME = { DISPATCHED: "dispatched_at", ENROUTE: "enroute_at", ONSCENE: "onscene_at", TRANSPORT: "transport_at", AT_HOSPITAL: "at_hospital_at" };
+  const LABEL = { DISPATCHED: "dispatched", ENROUTE: "en route", ONSCENE: "on scene", TRANSPORT: "transporting", AT_HOSPITAL: "at hospital" };
+  function page(callId, discipline, kind, note) {
+    if (!REF.active911.disciplines.includes(discipline)) return;
+    if (kind === "AUTO" && db.alerts.some((a) => a.call_id === callId && a.discipline === discipline && a.kind === "AUTO")) return;
+    const a = { id: nextId("alerts"), call_id: callId, discipline, kind, status: "SENT", created_at: iso(), sent_at: iso(), attempts: 1, note: note || null };
+    db.alerts.push(a);
+    const units = db.callUnits.filter((x) => x.call_id === callId && !x.cleared_at && (getUnit(x.unit_id).discipline === discipline)).map((x) => x.unit_code);
+    narr(callId, `Active911 alert sent (${discipline})${units.length ? ": " + units.join(", ") : ""} [simulated in demo]`, "SYSTEM");
+  }
   function clearFromCall(unit, reason, at) {
     if (!unit.current_call_id) return;
     const cu = db.callUnits.find((x) => x.call_id === unit.current_call_id && x.unit_id === unit.id && !x.cleared_at);
@@ -117,7 +137,7 @@
       if (!cu) {
         const primary = !db.callUnits.some((x) => x.call_id === target && !x.cleared_at);
         cu = { id: nextId("cu"), call_id: target, unit_id: unit.id, unit_code: unit.unit_code, officer_name: unit.officer_name,
-          is_primary: primary ? 1 : 0, dispatched_at: at, enroute_at: null, onscene_at: null, transport_at: null, cleared_at: null };
+          is_primary: primary ? 1 : 0, dispatched_at: at, enroute_at: null, onscene_at: null, transport_at: null, at_hospital_at: null, cleared_at: null };
         db.callUnits.push(cu);
       }
       if (!cu[TIME[status]]) cu[TIME[status]] = at;
@@ -125,6 +145,7 @@
       narr(target, `${unit.unit_code} ${LABEL[status]}${note ? ": " + note : ""}`, "SYSTEM", at);
       touch(call);
       newCall = target;
+      if (status === "DISPATCHED") pendingPages.push([target, unit.discipline]);
     } else if (unit.current_call_id) {
       clearFromCall(unit, note || status.replace(/_/g, " ").toLowerCase(), at);
     }
@@ -135,7 +156,9 @@
 
   // ------------------------------------------------------------------ calls
   const CALL_FIELDS = ["location_address", "location_city", "location_cross", "location_common", "location_notes",
-    "caller_name", "caller_phone", "caller_address", "summary", "case_number"];
+    "caller_name", "caller_phone", "caller_address", "summary", "case_number", "chief_complaint", "destination"];
+  let pendingPages = [];
+  const flushPages = () => { const p = pendingPages; pendingPages = []; for (const [cid, d] of p) page(cid, d, "AUTO"); };
   function createCall(b, at = iso()) {
     const type = REF.call_types.find((t) => t.code === clean(b.call_type, true));
     if (!type) throw new E(400, "'call_type' is required.");
@@ -147,11 +170,14 @@
       location_lat: null, location_lon: null, disposition: null, closed_at: null, closed_by: null,
       created_by: sysUser().id, created_at: at, updated_at: at, version: 1 };
     for (const f of CALL_FIELDS) c[f] = clean(b[f]);
+    c.discipline = b.discipline || type.discipline;
+    c.patient_count = b.patient_count === "" || b.patient_count == null ? null : Number(b.patient_count);
     db.calls.push(c);
     narr(c.id, `Call created: ${c.call_type} P${c.priority}${received !== at ? ` (back-entered, received ${received})` : ""}`, "SYSTEM", received);
     if (clean(b.narrative)) narr(c.id, clean(b.narrative), "NOTE", received);
     audit("CALL_CREATE", "call", c.id, { call_number: c.call_number });
     for (const uid of b.assign_units || []) setStatus(getUnit(Number(uid)), "DISPATCHED", c.id, null, at);
+    flushPages();
     return c;
   }
   function closeCall(c, disp, note, at = iso()) {
@@ -187,8 +213,13 @@
       c.case_number = fmtCase(++db.counters.case); narr(c.id, `Case number assigned: ${c.case_number}`, "SYSTEM", iso(old(5))); });
     fake(6, (t) => { const c = createCall({ call_type: "WELFARE", location_address: "221 Hill St", location_city: "Demo Town", caller_name: "Morgan Price", caller_phone: "555-0110", narrative: "Daughter has not heard from 81-year-old mother since yesterday. Lives alone." }, t);
       setStatus(unit("S1"), "DISPATCHED", c.id, null, iso(old(4))); setStatus(unit("S1"), "ENROUTE", c.id, null, iso(old(3))); });
+    fake(9, (t) => { const c = createCall({ call_type: "CARDIAC", location_address: "18 Spring St", location_city: "Demo Town", source: "911", caller_name: "Lee Park", caller_phone: "555-0133", patient_count: 1, chief_complaint: "68 y/o male, chest pain, conscious and breathing", narrative: "Wife reports chest pain for 20 minutes, history of heart problems." }, t);
+      setStatus(unit("A1"), "DISPATCHED", c.id, null, t); flushPages(); setStatus(unit("A1"), "ENROUTE", c.id, null, iso(old(8))); setStatus(unit("A1"), "ONSCENE", c.id, null, iso(old(3))); });
+    fake(4, (t) => { const c = createCall({ call_type: "FIREALARM", location_address: "100 Main St", location_common: "Demo Town Elementary School", location_city: "Demo Town", source: "ALARM_CO", narrative: "General fire alarm, zone 3 east wing. Alarm company calling keyholder." }, t);
+      setStatus(unit("E1"), "DISPATCHED", c.id, null, t); setStatus(unit("L1"), "DISPATCHED", c.id, null, t); flushPages(); setStatus(unit("E1"), "ENROUTE", c.id, null, iso(old(3))); });
     fake(2, (t) => { createCall({ call_type: "SUSP", location_address: "Lot behind 5 Depot Sq", location_city: "Demo Town", caller_name: "Anonymous", narrative: "Person checking car door handles in the lot. Male, dark jacket, backpack." }, t); });
     db.audit.length = 0; // start the demo's audit log clean
+    pendingPages = [];
   })();
 
   // ------------------------------------------------------------------ routing
@@ -258,6 +289,7 @@
       units: db.callUnits.filter((x) => x.call_id === id),
       persons: db.persons.filter((p) => p.call_id === id && !p.deleted),
       vehicles: db.vehicles.filter((v) => v.call_id === id && !v.deleted),
+      alerts: db.alerts.filter((a) => a.call_id === id),
       prior_at_address: c.location_address ? db.calls.filter((x) => x.id !== id && (x.location_address || "").toLowerCase() === c.location_address.toLowerCase())
         .map(({ id: pid, call_number, received_at, call_type, disposition }) => ({ id: pid, call_number, received_at, call_type, disposition })) : [],
     };
@@ -268,6 +300,8 @@
     if (c.status === "CLOSED" && !can("call.reopen")) throw new E(409, "Call is closed. A supervisor must make changes.");
     if (b.version != null && Number(b.version) !== c.version) throw new E(409, "This call was changed by someone else. Reload and try again.");
     const changes = [];
+    if ("patient_count" in b) c.patient_count = b.patient_count === "" || b.patient_count == null ? null : Number(b.patient_count);
+    if (b.discipline && b.discipline !== c.discipline) { changes.push(`discipline: ${c.discipline} → ${b.discipline}`); c.discipline = b.discipline; }
     for (const f of [...CALL_FIELDS, "call_type", "priority", "source"]) {
       if (!(f in b)) continue;
       const v = f === "priority" ? Number(b[f]) : clean(b[f], f === "call_type");
@@ -340,7 +374,7 @@
       if (!(can("unit.status.own") && u.officer_user_id === session.id)) throw new E(403, "You can only change the status of the unit you are signed on to.");
       if (b.call_id && b.status === "DISPATCHED") throw new E(403, "Officers cannot dispatch; use ENROUTE or ONSCENE to attach to a call.");
     }
-    setStatus(u, String(b.status || "").toUpperCase(), b.call_id ? Number(b.call_id) : null, clean(b.note)); bump(); return { ok: true };
+    setStatus(u, String(b.status || "").toUpperCase(), b.call_id ? Number(b.call_id) : null, clean(b.note)); flushPages(); bump(); return { ok: true };
   });
   R("POST", "/api/units/(\\d+)/signon", (b, q, id) => {
     const u = getUnit(id);
@@ -410,6 +444,13 @@
     if (q.username) rows = rows.filter((r) => (r.username || "").toLowerCase() === q.username.toLowerCase());
     return { entries: rows.slice(0, Number(q.limit) || 200), chain_ok: true, chain_rows: db.audit.length, chain_first_bad_id: null };
   });
+  R("POST", "/api/calls/(\\d+)/alert", (b, q, id) => {
+    need("alert.send"); getCall(id);
+    if (!REF.active911.disciplines.includes(b.discipline)) throw new E(400, "'discipline' must be one of: FIRE, EMS.");
+    page(id, b.discipline, "MANUAL", clean(b.note)); touch(getCall(id)); bump(); return { ok: true };
+  });
+  R("GET", "/api/alerts/status", () => ({ enabled: true, disciplines: REF.active911.disciplines, sent: db.alerts.length, pending: 0, failed: 0,
+    last_sent: db.alerts.length ? db.alerts[db.alerts.length - 1].sent_at : null, last_error: null }));
   R("GET", "/api/archive/status", () => ({ enabled: true, dir: "I:\\CAD\\Calls (simulated in demo)", last_ok: iso(), last_error: null,
     written_total: db.calls.length * 2, calls_total: db.calls.length, calls_not_yet_archived: 0 }));
   R("POST", "/api/archive/run", () => ({ ok: true }));

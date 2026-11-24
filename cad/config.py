@@ -38,6 +38,22 @@ DEFAULTS = {
         # Also write a PDF per call and a daily PDF call log.
         "pdf": "true",
     },
+    "active911": {
+        "enabled": "false",
+        # Active911 alert e-mail address(es) per discipline (Agency tab in Active911). Comma-separate several.
+        "fire_address": "",
+        "ems_address": "",
+        "police_address": "",
+        "smtp_host": "",
+        "smtp_port": "587",
+        "smtp_security": "starttls",
+        "smtp_username": "",
+        "smtp_password": "",
+        "smtp_password_file": "",
+        "from_address": "",
+        "include_caller": "false",
+        "default_city": "",
+    },
     "audit": {
         # Second, append-only copy of the audit log (JSON lines) on another machine/share.
         "mirror_dir": "",

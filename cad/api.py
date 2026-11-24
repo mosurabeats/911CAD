@@ -23,7 +23,7 @@ class ApiError(Exception):
 # Permissions
 # ---------------------------------------------------------------------------
 _BASE_DISPATCH = {"view", "call.create", "call.edit", "call.close", "narrative",
-                  "unit.status.any", "unit.crew", "entity.edit", "time.edit"}
+                  "unit.status.any", "unit.crew", "entity.edit", "time.edit", "alert.send"}
 PERMS = {
     "admin": _BASE_DISPATCH | {"call.reopen", "unit.manage", "export", "audit", "admin"},
     "supervisor": _BASE_DISPATCH | {"call.reopen", "unit.manage", "export", "audit"},
@@ -347,6 +347,9 @@ def reference(req):
         "unit_statuses": seed.UNIT_STATUSES,
         "call_statuses": sorted(seed.CALL_STATUSES),
         "unit_types": seed.UNIT_TYPES,
+        "unit_type_discipline": seed.UNIT_TYPE_DISCIPLINE,
+        "disciplines": seed.DISCIPLINES,
+        "active911": req.app.alerter.public_status() if getattr(req.app, "alerter", None) else {"enabled": False},
         "person_roles": seed.PERSON_ROLES,
         "vehicle_roles": seed.VEHICLE_ROLES,
         "roles": seed.ROLES,
@@ -376,7 +379,7 @@ def board(req):
     calls = rows_to_list(c.execute(
         """SELECT c.id, c.call_number, c.case_number, c.status, c.received_at, c.call_type, c.priority,
                   c.source, c.location_address, c.location_city, c.location_common, c.caller_name,
-                  c.disposition, c.closed_at, c.updated_at,
+                  c.disposition, c.closed_at, c.updated_at, c.discipline,
                   (SELECT group_concat(unit_code, ' ') FROM call_units cu
                     WHERE cu.call_id = c.id AND cu.cleared_at IS NULL) AS units
            FROM calls c
@@ -394,8 +397,13 @@ def board(req):
 CALL_TEXT_FIELDS = {
     "location_address": 200, "location_city": 80, "location_cross": 200, "location_common": 200,
     "location_notes": 1000, "caller_name": 150, "caller_phone": 40, "caller_address": 200,
-    "summary": 4000, "case_number": 40,
+    "summary": 4000, "case_number": 40, "chief_complaint": 200, "destination": 100,
 }
+
+
+def call_type_discipline(c, req, code):
+    r = c.execute("SELECT discipline FROM call_types WHERE agency_id=? AND code=?", (req.app.agency_id, code)).fetchone()
+    return r[0] if r else "POLICE"
 
 
 def _call_fields(c, req, body, partial):
@@ -418,6 +426,13 @@ def _call_fields(c, req, body, partial):
     for f, lo, hi in (("location_lat", -90, 90), ("location_lon", -180, 180)):
         if not partial or f in body:
             out[f] = num(body, f, lo, hi)
+    if not partial or "patient_count" in body:
+        out["patient_count"] = num(body, "patient_count", 0, 999, integer=True)
+    if body.get("discipline"):
+        out["discipline"] = one_of(s(body, "discipline", 10, upper=True), seed.DISCIPLINES, "discipline")
+    elif "call_type" in out:
+        # Default the discipline from the call type (on create, or when the type changes).
+        out["discipline"] = call_type_discipline(c, req, out["call_type"])
     if "received_at" in body and body.get("received_at"):
         if partial:
             require(req, "time.edit")
@@ -444,6 +459,7 @@ def create_call(req):
         cur = c.execute(f"INSERT INTO calls({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", vals)
         call_id = cur.lastrowid
         add_narrative(c, req, call_id, f"Call created: {f['call_type']} P{f['priority']}"
+                      + (f" [{f['discipline']}]" if f.get("discipline", "POLICE") != "POLICE" else "")
                       + (f" (back-entered, received {received})" if received != now else ""), "SYSTEM")
         if s(req.body, "narrative", 8000):
             add_narrative(c, req, call_id, s(req.body, "narrative", 8000))
@@ -469,6 +485,9 @@ def call_detail(req, call_id):
         "vehicles": rows_to_list(c.execute(
             "SELECT * FROM call_vehicles WHERE call_id=? AND deleted=0 ORDER BY id", (call_id,))),
         "prior_at_address": [],
+        "alerts": rows_to_list(c.execute(
+            "SELECT id, discipline, kind, status, created_at, sent_at, attempts, last_error, note FROM alerts"
+            " WHERE call_id=? ORDER BY id", (call_id,))),
     }
     if call["location_address"]:
         out["prior_at_address"] = rows_to_list(c.execute(
@@ -497,7 +516,7 @@ def update_call(req, call_id):
         sets = ", ".join(f"{k}=?" for k in changes)
         c.execute(f"UPDATE calls SET {sets} WHERE id=?", [f[k] for k in changes] + [call_id])
         touch_call(c, call_id)
-        visible = [k for k in ("call_type", "priority", "location_address", "received_at") if k in changes]
+        visible = [k for k in ("call_type", "priority", "discipline", "location_address", "received_at") if k in changes]
         if visible:
             add_narrative(c, req, call_id, "Changed " + "; ".join(
                 f"{k.replace('location_', '')}: {changes[k]['from'] or '—'} → {changes[k]['to'] or '—'}"
@@ -636,6 +655,9 @@ def search_calls(req):
     if q.get("status"):
         where.append("c.status=?")
         args.append(q["status"].upper())
+    if q.get("discipline"):
+        where.append("c.discipline=?")
+        args.append(q["discipline"].upper())
     if q.get("unit"):
         where.append("EXISTS (SELECT 1 FROM call_units cu WHERE cu.call_id=c.id AND cu.unit_code=?)")
         args.append(q["unit"].upper())
@@ -648,7 +670,7 @@ def search_calls(req):
                 raise ApiError(400, f"Invalid '{key}' date.")
     limit = min(int(q.get("limit") or 200), 1000)
     rows = rows_to_list(req.app.db.conn().execute(
-        f"""SELECT c.id, c.call_number, c.case_number, c.status, c.received_at, c.call_type, c.priority,
+        f"""SELECT c.id, c.call_number, c.case_number, c.status, c.received_at, c.call_type, c.priority, c.discipline,
                    c.location_address, c.location_city, c.caller_name, c.disposition,
                    (SELECT group_concat(DISTINCT unit_code) FROM call_units cu WHERE cu.call_id=c.id) AS units
             FROM calls c WHERE {' AND '.join(where)} ORDER BY c.received_at DESC LIMIT ?""", args + [limit]))
@@ -735,7 +757,7 @@ def update_entity(req, eid, kind):
 # Units
 # ---------------------------------------------------------------------------
 TIME_COL = {"DISPATCHED": "dispatched_at", "ENROUTE": "enroute_at", "ONSCENE": "onscene_at",
-            "TRANSPORT": "transport_at"}
+            "TRANSPORT": "transport_at", "AT_HOSPITAL": "at_hospital_at"}
 
 
 def _clear_unit_from_call(c, req, unit, reason, at):
@@ -776,10 +798,15 @@ def _set_unit_status(c, req, unit, status, call_id, note):
         if call["status"] == "PENDING":
             c.execute("UPDATE calls SET status='ACTIVE' WHERE id=?", (target,))
         label = {"DISPATCHED": "dispatched", "ENROUTE": "en route", "ONSCENE": "on scene",
-                 "TRANSPORT": "transporting"}[status]
+                 "TRANSPORT": "transporting", "AT_HOSPITAL": "at hospital"}[status]
         add_narrative(c, req, target, f"{unit['unit_code']} {label}" + (f": {note}" if note else ""), "SYSTEM", at)
         touch_call(c, target)
         new_call = target
+        if status == "DISPATCHED":
+            # Page Fire/EMS crews through Active911 (once per call per discipline; units are gathered at send time).
+            alerter = getattr(req.app, "alerter", None)
+            if alerter:
+                alerter.queue(c, target, unit.get("discipline") or "POLICE", "AUTO", None)
     else:
         if unit["current_call_id"]:
             _clear_unit_from_call(c, req, unit, note or status.replace("_", " ").lower(), at)
@@ -954,6 +981,7 @@ def _unit_fields(b, partial):
         f["description"] = s(b, "description", 100)
     if not partial or "unit_type" in b:
         f["unit_type"] = one_of(s(b, "unit_type", 20, upper=True) or "PATROL", seed.UNIT_TYPES, "unit_type")
+        f["discipline"] = seed.UNIT_TYPE_DISCIPLINE[f["unit_type"]]
     if "active" in b:
         f["active"] = 1 if b["active"] else 0
     return f
@@ -1005,10 +1033,12 @@ def admin_ref_save(req, table):
     with req.app.db.tx() as c:
         if table == "call_types":
             prio = num(b, "default_priority", 1, 5, integer=True) or 3
-            c.execute("INSERT INTO call_types(agency_id, code, description, default_priority, active) VALUES (?,?,?,?,?)"
+            disc = one_of(s(b, "discipline", 10, upper=True) or "POLICE", seed.DISCIPLINES, "discipline")
+            c.execute("INSERT INTO call_types(agency_id, code, description, default_priority, active, discipline)"
+                      " VALUES (?,?,?,?,?,?)"
                       " ON CONFLICT(agency_id, code) DO UPDATE SET description=excluded.description,"
-                      " default_priority=excluded.default_priority, active=excluded.active",
-                      (req.app.agency_id, code, desc, prio, active))
+                      " default_priority=excluded.default_priority, active=excluded.active, discipline=excluded.discipline",
+                      (req.app.agency_id, code, desc, prio, active, disc))
         else:
             c.execute("INSERT INTO dispositions(agency_id, code, description, active) VALUES (?,?,?,?)"
                       " ON CONFLICT(agency_id, code) DO UPDATE SET description=excluded.description, active=excluded.active",
@@ -1118,6 +1148,30 @@ Conventions
 * audit_log is a hash chain (each hash = sha256 of the previous hash and the row). Verify with
   `python manage.py verify-audit` against the original database.
 """
+
+
+def send_alert(req, call_id):
+    """Manually (re)send an Active911 alert for a call, e.g. for a second alarm or updated information."""
+    require(req, "alert.send")
+    alerter = req.app.alerter
+    if not alerter.enabled:
+        raise ApiError(400, "Active911 alerts are not configured ([active911] in config.ini).")
+    disc = one_of(s(req.body, "discipline", 10, upper=True) or "", alerter.disciplines(), "discipline")
+    note = s(req.body, "note", 300)
+    with req.app.db.tx() as c:
+        call = get_call(c, req, call_id)
+        alerter.queue(c, call_id, disc, "MANUAL", req.user, note=note)
+        add_narrative(c, req, call_id, f"Active911 alert requested ({disc})" + (f": {note}" if note else ""), "SYSTEM")
+        touch_call(c, call_id)
+        req.app.db.audit(c, req.user, req.ip, "ALERT_REQUEST", "call", call_id,
+                         {"discipline": disc, "call_number": call["call_number"]})
+    alerter.poke()
+    return {"ok": True}
+
+
+def alerts_status(req):
+    require(req, "view")
+    return req.app.alerter.public_status(detail=True)
 
 
 def archive_status(req):
@@ -1243,6 +1297,8 @@ ROUTES = [
     _r("POST", r"/api/calls/(\d+)/case-number", assign_case_number),
     _r("POST", r"/api/calls/(\d+)/close", close_call),
     _r("POST", r"/api/calls/(\d+)/reopen", reopen_call),
+    _r("POST", r"/api/calls/(\d+)/alert", send_alert),
+    _r("GET", r"/api/alerts/status", alerts_status),
     _r("POST", r"/api/calls/(\d+)/persons", lambda req, i: add_entity(req, i, "persons")),
     _r("POST", r"/api/calls/(\d+)/vehicles", lambda req, i: add_entity(req, i, "vehicles")),
     _r("PUT", r"/api/persons/(\d+)", lambda req, i: update_entity(req, i, "persons")),

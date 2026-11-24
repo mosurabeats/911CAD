@@ -27,16 +27,21 @@ DAY ONE (about an hour)
    Set up two-factor with an authenticator app on your phone
    (Microsoft Authenticator, Google Authenticator, Authy...).
 
-2. ADD UNITS - Admin tab > Units: one per call sign (P1, P2, S1, K9...).
+2. ADD UNITS - Admin tab > Units: one per call sign. Pick the type:
+     Police: patrol, supervisor, K9...      Fire: engine, ladder, tanker,
+     rescue, chief...                       EMS: ambulance ALS/BLS, supervisor
+   The type sets the unit's department (PD / FD / EMS tag on the board).
 
 3. REVIEW CALL TYPES AND DISPOSITIONS - Admin tab.
-   A standard list is preloaded. Change codes to match Valcour where you
+   A standard Police, Fire and EMS list is preloaded; each call type belongs
+   to a department, which decides who gets paged. Change codes to match Valcour where you
    can (makes moving the records back much easier). Deactivate codes you
    don't use. Codes can't be deleted, so old records keep their meaning.
 
 4. CREATE USER ACCOUNTS - Admin tab > Users. One per person, never shared.
      dispatcher  create, run and close calls; dispatch units
-     officer     for MDTs: own unit status, notes, persons/vehicles, case #s
+     officer     for MDTs and field crews (police, fire, EMS): own unit
+                 status, notes, persons/vehicles, case #s
      supervisor  dispatcher + reopen calls, audit log, exports
      records     read-only, search, export
      admin       everything, including users and units
@@ -54,6 +59,15 @@ DAY ONE (about an hour)
 6. BRIEF DISPATCHERS (5 minutes)
      - F2 = new call. Open a call, then use the unit buttons
        (DISP / ENR / ONS / TRN / AVL) on the unit cards.
+       Ambulances also have HOSP (at hospital); fire and EMS units have
+       QTRS (available in quarters).
+     - All / Police / Fire / EMS buttons above the call list filter the board.
+     - EMS calls have Patients / Chief complaint / Destination fields.
+     - ACTIVE911: dispatching Fire or EMS units pages those crews
+       automatically (one page per department per call). Use "Page Fire" /
+       "Page EMS" on the call for a second alarm or new information.
+       The call shows "Active911 alert sent". If it says FAILED, page the
+       crews another way (radio/tones) - the CAD keeps retrying.
      - Ctrl+Enter saves a narrative entry.
      - Sign out at end of shift. Never share accounts.
      - Report any "failed sign-in attempts" notice you didn't cause.
@@ -72,6 +86,7 @@ Same day someone leaves
 Daily           Daily call log PDF goes to the I: drive automatically.
                 Any day's log can also be downloaded: Export tab >
                 Daily call log (PDF).
+Each shift      Export tab: Active911 paging shows "on" and 0 failed.
 Weekly          Audit tab: should say "Audit chain verified". Look over
                 failed sign-ins, ACCESS_DENIED, EXPORT and CALL_REOPEN.
                 Export tab: confirm the I: drive copy shows no errors.

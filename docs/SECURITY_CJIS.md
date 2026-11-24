@@ -47,6 +47,7 @@ Legend: **App** = built into the software · **Agency** = your agency or IT must
 | Web application protections | App | CSRF tokens plus an Origin check, strict Content-Security-Policy, no third-party code or CDNs, parameterized SQL, all output escaped, request size limits, connection timeouts |
 | Exports and printouts | Agency | Store export ZIPs only on encrypted, agency-controlled media, and shred printouts per policy. Every export is logged. |
 | Archive folder (I: drive) | Agency | A PD-only share on an encrypted file server inside the CJIS boundary |
+| Active911 pages | App + Agency | Pages leave the CJIS boundary by email to Active911's service and crews' phones. The app minimizes them by default: Fire and EMS only, no caller name or phone, no patient names. Police paging is off unless `police_address` is set; ask the CSO first. EMS pages carry a chief complaint and patient count. Confirm with the EMS service that this matches their policy for responder notification. Keep the mail account password in a file restricted to Administrators and the CAD service. |
 | NCIC/VCIC responses | Agency | Don't paste query responses into narratives unless the CSO approves storing them here. |
 
 ## Physical, personnel and system
