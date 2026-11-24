@@ -8,6 +8,7 @@
   python manage.py backup [PATH]               Write a consistent copy of the database
   python manage.py export [--from D] [--to D] [-o FILE.zip]   Full data export (JSON + CSV)
   python manage.py set-next-number call|case N [--year YYYY]   Set the next number issued
+  python manage.py check                       Verify the whole configuration (run after install)
   python manage.py verify-audit                Check the audit log hash chain for tampering
   python manage.py make-cert                   Print the command to create a self-signed TLS cert
 
@@ -118,6 +119,80 @@ def setup_single_pc(config_path):
     return 0
 
 
+def run_checks(cfg, app):
+    """Post-install verification for IT. Prints PASS / WARN / FAIL per item; exit code 1 if any FAIL."""
+    import ssl
+    import tempfile
+    from cad.server import is_local_only
+    results = []
+
+    def res(level, item, detail=""):
+        results.append(level)
+        print(f"  [{level}] {item}" + (f" - {detail}" if detail else ""))
+
+    print("\nInterim CAD configuration check\n")
+    local = is_local_only(cfg)
+    res("PASS", "Mode", "single computer (127.0.0.1 only)" if local else f"network, listening on {cfg.get('server', 'host')}:{cfg.get('server', 'port')}")
+    cert, key = cfg.path_of("server", "tls_cert"), cfg.path_of("server", "tls_key")
+    if cert:
+        try:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(cert, key or None)
+            res("PASS", "TLS certificate and key load", cert)
+        except (OSError, ssl.SSLError) as e:
+            res("FAIL", "TLS certificate", f"{cert}: {e}")
+    elif local:
+        res("PASS", "TLS", "not needed in single-computer mode")
+    elif cfg.getbool("server", "allow_insecure_http"):
+        res("FAIL", "TLS", "allow_insecure_http = true - not acceptable for production")
+    else:
+        res("FAIL", "TLS", "tls_cert / tls_key not set - the server will not start")
+    if not local:
+        if app.allowed_networks:
+            res("PASS", "Allowed networks", ", ".join(str(n) for n in app.allowed_networks))
+        else:
+            res("WARN", "Allowed networks", "empty - any address that reaches the port can try to sign in")
+    res("PASS" if cfg.getbool("security", "require_mfa") else "FAIL", "Two-factor sign-in required",
+        "yes" if cfg.getbool("security", "require_mfa") else "require_mfa = false")
+    for section, key_, label in (("archive", "dir", "Call archive folder (I: drive copy)"),
+                                 ("audit", "mirror_dir", "Audit mirror folder"),
+                                 ("storage", "backup_dir", "Backup folder")):
+        d = cfg.path_of(section, key_)
+        if not d:
+            res("WARN", label, "not configured")
+            continue
+        if not local and len(d) > 1 and d[1] == ":" and d[0].upper() not in "C":
+            res("WARN", label, f"{d} uses a drive letter; a background service usually cannot see mapped drives - use \\\\server\\share")
+        try:
+            os.makedirs(d, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=d, prefix=".cad-write-test-", delete=True):
+                pass
+            res("PASS", label, f"{d} is writable (by the account running this check)")
+        except OSError as e:
+            res("FAIL", label, f"{d}: {e}")
+    db_path = cfg.path_of("storage", "db_path")
+    if db_path.startswith("\\\\") or (len(db_path) > 1 and db_path[1] == ":" and db_path[0].upper() != "C"):
+        res("WARN", "Database location", f"{db_path} looks like a network drive - keep the live database on a local disk")
+    else:
+        res("PASS", "Database location", db_path)
+    c = app.db.conn()
+    admins = c.execute("SELECT count(*) FROM users WHERE role='admin' AND active=1").fetchone()[0]
+    res("PASS" if admins else "FAIL", "Administrator account", f"{admins} active" if admins else "none - run: manage.py create-admin NAME")
+    units = c.execute("SELECT count(*) FROM units WHERE active=1").fetchone()[0]
+    res("PASS" if units else "WARN", "Units configured", str(units) if units else "none yet - add them in Admin > Units")
+    from cad.api import format_number
+    year = datetime.now().year
+    nxt = (c.execute("SELECT value FROM counters WHERE agency_id=? AND year=? AND kind='call'",
+                     (app.agency_id, year)).fetchone() or [0])[0] + 1
+    res("PASS", "Next call number", format_number(cfg, "call", year, nxt)
+        + ("" if nxt > 1 else "  (starts at 1 - use set-next-number to continue after Valcour's last number)"))
+    ok, n, bad = app.db.verify_audit()
+    res("PASS" if ok else "FAIL", "Audit log integrity", f"{n} entries verified" if ok else f"chain broken at entry {bad}")
+    fails, warns = results.count("FAIL"), results.count("WARN")
+    print(f"\n{fails} problem(s), {warns} warning(s).\n")
+    return 1 if fails else 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="Interim CAD management")
     ap.add_argument("--config", default=os.path.join(HERE, "config.ini"))
@@ -143,6 +218,7 @@ def main():
     p.add_argument("next", type=int)
     p.add_argument("--year", type=int, default=datetime.now().year)
     sub.add_parser("verify-audit")
+    sub.add_parser("check", help="verify configuration, certificate, folders, accounts and audit log")
     sub.add_parser("make-cert")
     args = ap.parse_args()
 
@@ -227,6 +303,8 @@ def main():
             db.audit(c, None, "cli", "COUNTER_SET", "counter", f"{args.kind}-{args.year}",
                      {"next": args.next, "previous_value": cur[0] if cur else 0})
         print(f"Next {args.kind} number for {args.year}: {format_number(cfg, args.kind, args.year, args.next)}")
+    elif args.cmd == "check":
+        return run_checks(cfg, app)
     elif args.cmd == "verify-audit":
         ok, n, bad = db.verify_audit()
         if ok:

@@ -1,0 +1,182 @@
+==============================================================================
+ INTERIM CAD - INSTALLATION INSTRUCTIONS FOR IT
+==============================================================================
+
+WHAT THIS IS
+------------
+A temporary computer-aided dispatch (CAD) and call-logging system for the
+police department while the state system (Valcour) is offline. It records
+calls, unit status and times, narratives, persons and vehicles, and keeps
+everything so it can be exported back into Valcour or a replacement later.
+
+  * One server (or one always-on PC) runs the program.
+  * Dispatch PCs and in-car MDTs use it in a web browser over HTTPS.
+    NOTHING is installed on the dispatch PCs or MDTs.
+  * Every call is also copied automatically to a network folder (the I: drive).
+
+   Dispatch PCs --+
+   Desk PCs ------+--- HTTPS (port 8443) on PD network ---> CAD server
+   MDTs -- VPN ---+                                          |- live database (local disk)
+                                                             |- hourly backups (local disk)
+                                                             '-> copies to network shares:
+                                                                 - call archive (I: drive)
+                                                                 - audit-log mirror
+
+  * Written in Python, standard library only: no third-party packages, no
+    internet access needed at runtime, no cloud services, no telemetry.
+  * The data is criminal justice information (CJI). The CJIS Security Policy
+    applies to the server, the shares and anyone who administers them.
+    See docs\SECURITY_CJIS.md before go-live.
+
+Allow 2-3 hours.
+
+
+WHAT YOU NEED BEFORE STARTING
+-----------------------------
+[ ] A Windows 10/11 Pro or Windows Server machine, always on, in a locked,
+    access-controlled room. 4 GB RAM and 10 GB of disk are plenty.
+    BitLocker ON. Fully patched. Antivirus on. Static IP / DNS name
+    (example: cad.mpd.local). On a UPS.
+[ ] Python 3.12 or newer from python.org, installed with
+    "Install Python for all users" and "Add Python to environment variables".
+    (Only python.org. Nothing else needs to be installed.)
+[ ] A TLS certificate for the server's name, as two PEM files:
+    tls.crt and tls.key. Best: issued by the town/agency internal CA, so
+    domain PCs trust it with no warnings. (Self-signed: see step 3.)
+[ ] The network ranges that may reach the CAD, in CIDR form:
+    dispatch PCs, PD desk PCs, and the MDT VPN address pool.
+    Example: 10.20.30.0/24, 10.20.31.0/24, 172.16.50.0/24
+[ ] UNC path for the call archive (the PD's I: drive location), e.g.
+    \\townserver\police\CAD\Calls. Run "net use" on a PD PC to see
+    what I: maps to. PD-only permissions.
+[ ] UNC path for the audit mirror, e.g. \\townserver\cjis-audit\InterimCAD.
+    Only IT security / the TAC should be able to modify or delete it.
+[ ] Grant the SERVER'S COMPUTER ACCOUNT (DOMAIN\SERVERNAME$) Modify
+    permission on both shares. The CAD runs as NETWORK SERVICE, which uses
+    the computer account on the network.
+[ ] From the department: the name of the first administrator, and the LAST
+    call number Valcour issued this year (so new numbers don't collide).
+
+
+INSTALLATION
+------------
+1. Copy this folder to the server (any location; the installer copies it to
+   C:\InterimCAD).
+
+2. Open PowerShell AS ADMINISTRATOR in this folder and run (use your ranges):
+
+     Set-ExecutionPolicy -Scope Process Bypass
+     .\scripts\install-server.ps1 -AllowedSubnets 10.20.30.0/24,10.20.31.0/24,172.16.50.0/24
+
+   The installer:
+     - copies the program to C:\InterimCAD
+     - removes inherited permissions; only Administrators, SYSTEM and
+       NETWORK SERVICE can access the folder
+     - creates C:\InterimCAD\config.ini with your allowed networks
+     - adds a firewall rule: TCP 8443 inbound ONLY from those ranges,
+       Domain/Private profiles
+     - registers a startup scheduled task "InterimCAD" running as
+       NETWORK SERVICE that restarts automatically if it stops
+
+   NOTE: the installer was written for Windows but has NOT yet been run on a
+   Windows machine. Try it on a test PC first. Each step prints what it did;
+   any step can also be done by hand (docs\INSTALL_WINDOWS.md describes each).
+
+3. Certificate: copy tls.crt and tls.key to C:\InterimCAD\data\
+   Self-signed alternative (OpenSSL, e.g. from Git for Windows; change the
+   name and IP):
+     openssl req -x509 -newkey rsa:3072 -sha256 -days 825 -nodes ^
+       -keyout tls.key -out tls.crt -subj "/CN=cad.mpd.local" ^
+       -addext "subjectAltName=DNS:cad.mpd.local,IP:10.20.30.5"
+   then deploy tls.crt (NOT the key) to client PCs' Trusted Root store by GPO.
+
+4. Edit C:\InterimCAD\config.ini (Notepad, as Administrator):
+     [agency]  name = ...            ori = ...
+     [archive] dir = \\townserver\police\CAD\Calls
+     [audit]   mirror_dir = \\townserver\cjis-audit\InterimCAD
+   Leave db_path on the local disk. Do NOT put the live database on a share.
+
+5. In PowerShell, in C:\InterimCAD:
+     py manage.py set-next-number call NNNN     (NNNN = Valcour's last + 1)
+     py manage.py create-admin <username>       (the department's admin)
+
+6. Verify, then start:
+     py manage.py check                          (fix anything marked FAIL)
+     Start-ScheduledTask -TaskName InterimCAD
+     Get-Content C:\InterimCAD\data\logs\server.log -Tail 20
+
+   The log should say: "Interim CAD running at https://...:8443/"
+
+   "check" runs as YOUR account. To confirm the SERVICE can write to the
+   shares, watch for files appearing in the archive and audit-mirror folders
+   within a minute of creating a test call. If they don't, the log shows the
+   error (usually share permissions for DOMAIN\SERVERNAME$).
+
+7. From a dispatch PC open  https://cad.mpd.local:8443  (your server name).
+   There should be a padlock and NO certificate warning.
+   Optional desktop shortcut that opens it as its own window:
+     "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --app=https://cad.mpd.local:8443
+
+8. The department admin signs in, sets up two-factor (authenticator app),
+   then adds units and user accounts in the Admin tab.
+
+
+DISPATCH PCs AND MDTs (Group Policy where possible)
+-----------------------------------------------------
+[ ] Nothing to install. Trust the certificate (only if self-signed).
+[ ] Individual Windows logins, no shared accounts.
+[ ] Screen lock after 30 minutes or less of inactivity.
+[ ] Browser password saving off (Edge/Chrome policy PasswordManagerEnabled = 0).
+[ ] BitLocker on laptops and MDTs.
+[ ] MDTs reach the server ONLY through the existing CJIS-compliant agency VPN.
+    Never open 8443 on the internet firewall.
+
+
+GO-LIVE CHECKS (do all, keep a copy)
+------------------------------------
+[ ] "py manage.py check" shows 0 problems.
+[ ] Dispatch PC: padlock, no warning.
+[ ] A PC OUTSIDE the allowed ranges cannot reach the CAD.
+[ ] http:// (without the s) does not work.
+[ ] A new user is forced to change password AND set up two-factor.
+[ ] 5 wrong passwords lock the account; the Audit tab shows it, chain verified.
+[ ] A test call appears as files in the I: drive archive within a minute.
+[ ] A non-PD town user cannot open the archive or audit-mirror folders.
+[ ] RESTORE TEST: copy a file from C:\InterimCAD\data\backups to a spare PC
+    and start the CAD from it.
+
+
+DAY-TO-DAY OPERATIONS
+---------------------
+Start / stop        Start-ScheduledTask InterimCAD / Stop-ScheduledTask InterimCAD
+Log                 C:\InterimCAD\data\logs\server.log
+Live database       C:\InterimCAD\data\cad.sqlite3
+Backups             C:\InterimCAD\data\backups  (hourly, last 96 kept).
+                    ALSO copy these off the server daily to encrypted,
+                    agency-controlled storage.
+Manual backup       py manage.py backup
+Restore             Stop the task, replace data\cad.sqlite3 with a backup
+                    (delete any cad.sqlite3-wal / -shm files), start the task.
+Locked-out user     Admin tab > Users > unlock, or:  py manage.py unlock NAME
+Forgotten password  Admin tab > Users > reset pw, or: py manage.py reset-password NAME
+Lost phone (2FA)    Admin tab > Users > reset MFA
+Check audit trail   py manage.py verify-audit
+Full data export    py manage.py export -o export.zip   (contains CJI - encrypted media only)
+Update the program  Stop the task, run "py manage.py backup", replace the cad\
+                    and static\ folders, start the task. config.ini and data\
+                    are kept.
+Self-test           py -m unittest discover -s tests   (from this folder; all should pass)
+
+
+MORE DETAIL
+-----------
+docs\INSTALL_WINDOWS.md   step-by-step with explanations
+docs\SECURITY_CJIS.md     CJIS control checklist and known limitations
+docs\DATA_MIGRATION.md    getting the data back into Valcour
+docs\SINGLE_PC.md         one-computer mode (no server)
+README.md                 features and roles
+
+
+DEPARTMENT CONTACT
+------------------
+Name: ______________________   Phone: ______________   Email: ______________

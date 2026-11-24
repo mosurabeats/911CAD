@@ -88,7 +88,9 @@ Write-Host "Firewall: TCP $Port allowed only from $($AllowedSubnets -join ', ').
 # --- 6. Startup task running as NETWORK SERVICE ----------------------------------------------------
 $action = New-ScheduledTaskAction -Execute $python -Argument "manage.py serve" -WorkingDirectory $InstallDir
 $trigger = New-ScheduledTaskTrigger -AtStartup
-$principal = New-ScheduledTaskPrincipal -UserId "S-1-5-20" -LogonType ServiceAccount -RunLevel Limited
+# Resolve NETWORK SERVICE by its well-known SID so this works on any Windows language.
+$netSvc = (New-Object System.Security.Principal.SecurityIdentifier("S-1-5-20")).Translate([System.Security.Principal.NTAccount]).Value
+$principal = New-ScheduledTaskPrincipal -UserId $netSvc -LogonType ServiceAccount -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 `
     -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal `
@@ -107,5 +109,6 @@ Write-Host " 2. Edit $cfg  (agency name, ORI, [archive] dir, [audit] mirror_dir)
 Write-Host " 3. Create the first administrator:"
 Write-Host "      cd $InstallDir ; & '$python' manage.py create-admin <yourname>"
 Write-Host " 4. Start it:   Start-ScheduledTask -TaskName $TaskName"
-Write-Host " 5. Check:      Get-Content $data\logs\server.log -Tail 20"
+Write-Host " 5. Verify:     & '$python' manage.py check"
+Write-Host "    Log:        Get-Content $data\logs\server.log -Tail 20"
 Write-Host " 6. From a dispatch PC browse to  https://<this-server-name>:$Port"
